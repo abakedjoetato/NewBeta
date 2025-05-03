@@ -1,176 +1,43 @@
-{% extends 'base.html' %}
-
-{% block title %}Tower of Temptation PvP Statistics Bot - Home{% endblock %}
-
-{% block content %}
-<div class="row mb-4">
-    <div class="col-md-8">
-        <div class="card bg-dark text-light border-success mb-4">
-            <div class="card-body">
-                <h1 class="card-title display-5 mb-4 text-success">Tower of Temptation PvP Statistics</h1>
-                <p class="lead">Advanced multi-guild PvP statistics and event tracking Discord bot for multiplayer games.</p>
-                <p>Track kills, deaths, player connections, and in-game events with our powerful Discord bot designed for communities playing games like Deadside.</p>
-                
-                <div class="row mt-4">
-                    <div class="col-md-6">
-                        <div class="card bg-dark border-success mb-3">
-                            <div class="card-body">
-                                <h5 class="card-title text-success">Killfeed System</h5>
-                                <p class="card-text">Real-time monitoring of player kills with weapon and distance tracking.</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="card bg-dark border-success mb-3">
-                            <div class="card-body">
-                                <h5 class="card-title text-success">Statistics Tracking</h5>
-                                <p class="card-text">Detailed leaderboards for players, weapons, and kill distances.</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="card bg-dark border-success mb-3">
-                            <div class="card-body">
-                                <h5 class="card-title text-success">Event Monitoring</h5>
-                                <p class="card-text">Track in-game events like airdrops, trader spawns, and convoys.</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="card bg-dark border-success mb-3">
-                            <div class="card-body">
-                                <h5 class="card-title text-success">Voice Channel Updates</h5>
-                                <p class="card-text">Dynamically update VC names with online player counts.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="text-center mt-4">
-                    <a href="https://discord.gg/EmeraldServers" target="_blank" class="btn btn-success btn-lg me-2">
-                        <i class="fab fa-discord me-2"></i> Join Our Discord
-                    </a>
-                    <a href="{{ url_for('login') }}" class="btn btn-outline-success btn-lg">
-                        <i class="fas fa-sign-in-alt me-2"></i> Login to Dashboard
-                    </a>
-                </div>
-            </div>
-        </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Bot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #2c2f33;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 800px;
+            padding: 2rem;
+            text-align: center;
+        }
+        h1 {
+            color: #7289da;
+        }
+        .logo {
+            max-width: 150px;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img class="logo" src="/static/img/logo.png" alt="Bot Logo">
+        <h1>PvP Statistics Discord Bot</h1>
+        <p>This is a Discord bot for tracking PvP statistics and events.</p>
+        <p>The bot is currently running and should be accessible in your Discord server.</p>
+        <p>To interact with the bot, use the commands in your Discord server.</p>
     </div>
-    
-    <div class="col-md-4">
-        <div class="card bg-dark text-light border-success mb-4">
-            <div class="card-header bg-success bg-opacity-25 text-success">
-                <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i> Bot Statistics</h5>
-            </div>
-            <div class="card-body">
-                {% if stats %}
-                <div class="row">
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-server text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Servers</small>
-                                <span class="fw-bold">{{ stats.server_count }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-users text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Guilds</small>
-                                <span class="fw-bold">{{ stats.guild_count }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-skull text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Kills</small>
-                                <span class="fw-bold">{{ stats.total_kills }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-plug text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Connections</small>
-                                <span class="fw-bold">{{ stats.total_connections }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-user-check text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Players</small>
-                                <span class="fw-bold">{{ stats.monitored_players }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-6 mb-3">
-                        <div class="d-flex align-items-center">
-                            <div class="icon-box bg-success bg-opacity-10 rounded-circle me-2 p-2">
-                                <i class="fas fa-gem text-success"></i>
-                            </div>
-                            <div>
-                                <small class="text-muted d-block">Premium</small>
-                                <span class="fw-bold">{{ stats.premium_guilds }}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="text-center text-muted mt-2">
-                    <small>Updated: {{ stats.timestamp.strftime('%Y-%m-%d %H:%M UTC') }}</small>
-                </div>
-                {% else %}
-                <p class="text-center text-muted my-4">No statistics available yet.</p>
-                {% endif %}
-            </div>
-        </div>
-        
-        <div class="card bg-dark text-light border-success">
-            <div class="card-header bg-success bg-opacity-25 text-success">
-                <h5 class="mb-0"><i class="fas fa-crown me-2"></i> Premium Features</h5>
-            </div>
-            <div class="card-body">
-                <ul class="list-group list-group-flush bg-transparent">
-                    <li class="list-group-item bg-dark text-light border-success ps-0">
-                        <i class="fas fa-check-circle text-success me-2"></i> Custom Embed Themes
-                    </li>
-                    <li class="list-group-item bg-dark text-light border-success ps-0">
-                        <i class="fas fa-check-circle text-success me-2"></i> Economy System
-                    </li>
-                    <li class="list-group-item bg-dark text-light border-success ps-0">
-                        <i class="fas fa-check-circle text-success me-2"></i> Faction Management
-                    </li>
-                    <li class="list-group-item bg-dark text-light border-success ps-0">
-                        <i class="fas fa-check-circle text-success me-2"></i> Event Tracking
-                    </li>
-                    <li class="list-group-item bg-dark text-light border-success ps-0">
-                        <i class="fas fa-check-circle text-success me-2"></i> Voice Channel Updates
-                    </li>
-                </ul>
-                <div class="text-center mt-3">
-                    <a href="https://discord.gg/EmeraldServers" target="_blank" class="btn btn-sm btn-success">
-                        Upgrade Now
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
+</body>
+</html>
