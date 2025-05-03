@@ -22,3 +22,10 @@ psycopg2-binary>=2.9.10
 pymongo>=4.12.1
 python-dotenv>=1.1.0
 trafilatura>=2.0.0
+discord.py
+motor
+pymongo
+discord.py
+motor
+paramiko
+pymongo

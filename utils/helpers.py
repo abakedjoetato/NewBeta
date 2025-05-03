@@ -1,249 +1,306 @@
 """
-Helper utility functions for various tasks
-"""
-import re
-import logging
-import random
-import discord
-import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union, TypeVar, Awaitable, Callable
+Helper utilities for the Tower of Temptation PvP Statistics Discord Bot.
 
-# Define TypeVar for generic return type
-T = TypeVar('T')
+This module provides:
+1. Pagination for embeds
+2. Permission checking utility functions
+3. Interactive confirmation UI
+4. Other general utility functions
+"""
+import asyncio
+import logging
+from typing import Dict, List, Optional, Any, Union, Callable
+
+import discord
+from discord.ext import commands
+
+from utils.embed_builder import EmbedBuilder
 
 logger = logging.getLogger(__name__)
 
-def get_guild_premium_tier(guild_data: Dict[str, Any]) -> int:
-    """Get the premium tier for a guild"""
-    return guild_data.get("premium_tier", 0)
+def has_admin_permission(interaction: discord.Interaction) -> bool:
+    """Check if a user has admin permissions
+    
+    Args:
+        interaction: Discord interaction
+        
+    Returns:
+        bool: True if user has admin permissions
+    """
+    if interaction.user.guild_permissions.administrator:
+        return True
+    
+    if interaction.user.id == interaction.guild.owner_id:
+        return True
+    
+    return False
 
-def is_feature_enabled(guild_data: Dict[str, Any], feature: str) -> bool:
-    """Check if a feature is enabled for a guild based on premium tier"""
-    from config import PREMIUM_TIERS
+def has_mod_permission(interaction: discord.Interaction) -> bool:
+    """Check if a user has moderator permissions
+    
+    Args:
+        interaction: Discord interaction
+        
+    Returns:
+        bool: True if user has moderator permissions
+    """
+    if has_admin_permission(interaction):
+        return True
+    
+    if interaction.user.guild_permissions.manage_channels:
+        return True
+    
+    if interaction.user.guild_permissions.kick_members:
+        return True
+    
+    return False
 
-    tier = get_guild_premium_tier(guild_data)
-    available_features = PREMIUM_TIERS.get(tier, {}).get("features", [])
-
-    return feature in available_features
-
-def can_add_server(guild_data: Dict[str, Any]) -> bool:
-    """Check if a guild can add more servers based on premium tier"""
-    from config import PREMIUM_TIERS
-
-    tier = get_guild_premium_tier(guild_data)
-    max_servers = PREMIUM_TIERS.get(tier, {}).get("max_servers", 1)
-    current_servers = len(guild_data.get("servers", []))
-
-    return current_servers < max_servers
-
-def format_timestamp(timestamp: datetime) -> str:
-    """Format a timestamp for display"""
-    return timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-def create_pagination_buttons() -> discord.ui.View:
-    """Create pagination buttons for embeds"""
-    view = discord.ui.View()
-
-    # First page button
-    first_button = discord.ui.Button(
-        emoji="⏮️", 
-        style=discord.ButtonStyle.gray, 
-        custom_id="pagination_first"
-    )
-    view.add_item(first_button)
-
-    # Previous page button
-    prev_button = discord.ui.Button(
-        emoji="◀️", 
-        style=discord.ButtonStyle.gray, 
-        custom_id="pagination_prev"
-    )
-    view.add_item(prev_button)
-
-    # Page indicator (disabled button)
-    page_indicator = discord.ui.Button(
-        label="Page 1", 
-        style=discord.ButtonStyle.gray, 
-        disabled=True,
-        custom_id="pagination_indicator"
-    )
-    view.add_item(page_indicator)
-
-    # Next page button
-    next_button = discord.ui.Button(
-        emoji="▶️", 
-        style=discord.ButtonStyle.gray, 
-        custom_id="pagination_next"
-    )
-    view.add_item(next_button)
-
-    # Last page button
-    last_button = discord.ui.Button(
-        emoji="⏭️", 
-        style=discord.ButtonStyle.gray, 
-        custom_id="pagination_last"
-    )
-    view.add_item(last_button)
-
-    return view
-
-def paginate_embeds(embeds: List[discord.Embed], page: int = 0) -> tuple:
-    """Get the current embed and update page indicator"""
-    if not embeds:
-        # Return empty embed if no embeds
-        return discord.Embed(
-            title="No Data",
-            description="No data available to display.",
-            color=discord.Color.red()
-        ), None
-
-    # Ensure page is within bounds
-    page = max(0, min(page, len(embeds) - 1))
-
-    # Get current embed
-    current_embed = embeds[page]
-
-    # Create view with pagination buttons
-    view = create_pagination_buttons()
-
-    # Update page indicator
-    for item in view.children:
-        if item.custom_id == "pagination_indicator":
-            item.label = f"Page {page + 1}/{len(embeds)}"
-
-    return current_embed, view
-
-async def update_voice_channel_name(bot, guild_id: int, channel_id: int, player_count: int, queue_count: int = 0):
-    """Update the voice channel name to show player counts"""
-    try:
-        # Ensure guild_id and channel_id are integers
-        guild_id = int(str(guild_id).strip())
-        channel_id = int(str(channel_id).strip())
-
-        guild = bot.get_guild(guild_id)
-        if not guild:
-            logger.warning(f"Guild {guild_id} not found for voice channel update")
-            return False
-
-        channel = guild.get_channel(channel_id)
-        if not channel:
-            try:
-                # Try to fetch channel through HTTP API in case it's not in cache
-                channel = await guild.fetch_channel(channel_id)
-            except discord.NotFound:
-                logger.error(f"Voice channel {channel_id} not found in guild {guild_id}")
-                return False
-            except Exception as e:
-                logger.error(f"Error fetching voice channel: {e}")
-                return False
-
-        # Format channel name
-        if queue_count > 0:
-            new_name = f"Players: {player_count} (Queue: {queue_count})"
+async def confirm(
+    interaction: discord.Interaction,
+    message: str,
+    timeout: int = 60,
+    confirm_label: str = "Confirm",
+    cancel_label: str = "Cancel",
+    ephemeral: bool = True
+) -> bool:
+    """Ask for confirmation with buttons
+    
+    Args:
+        interaction: Discord interaction
+        message: Confirmation message
+        timeout: Timeout in seconds
+        confirm_label: Label for confirm button
+        cancel_label: Label for cancel button
+        ephemeral: Whether to send as ephemeral message
+        
+    Returns:
+        bool: True if confirmed, False if canceled or timed out
+    """
+    # Create view with confirm/cancel buttons
+    class ConfirmView(discord.ui.View):
+        def __init__(self, timeout: int):
+            super().__init__(timeout=timeout)
+            self.value = None
+        
+        @discord.ui.button(label=confirm_label, style=discord.ButtonStyle.green)
+        async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.value = True
+            self.stop()
+            await interaction.response.defer()
+        
+        @discord.ui.button(label=cancel_label, style=discord.ButtonStyle.grey)
+        async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.value = False
+            self.stop()
+            await interaction.response.defer()
+    
+    # Create view and send confirmation
+    view = ConfirmView(timeout=timeout)
+    
+    if interaction.response.is_done():
+        # If response is already done, send followup
+        msg = await interaction.followup.send(message, view=view, ephemeral=ephemeral)
+    else:
+        # Otherwise send initial response
+        await interaction.response.send_message(message, view=view, ephemeral=ephemeral)
+        msg = await interaction.original_response()
+    
+    # Wait for user response
+    await view.wait()
+    
+    # Edit message to disable buttons if interaction timed out
+    if view.value is None:
+        view.disable_all_items()
+        if ephemeral:
+            await msg.edit(content=f"{message}\n\n*Timed out*", view=view)
         else:
-            new_name = f"Players: {player_count}"
+            try:
+                await msg.edit(content=f"{message}\n\n*Timed out*", view=view)
+            except discord.HTTPException:
+                pass
+    
+    return view.value or False
 
-        # Update channel name if different
-        if channel.name != new_name:
-            await channel.edit(name=new_name)
-            logger.info(f"Updated voice channel name to '{new_name}' in guild {guild.name}")
+async def paginate_embeds(
+    interaction: discord.Interaction,
+    embeds: List[discord.Embed],
+    timeout: int = 60,
+    ephemeral: bool = False
+) -> None:
+    """Display paginated embeds
+    
+    Args:
+        interaction: Discord interaction
+        embeds: List of embeds to paginate
+        timeout: Timeout in seconds
+        ephemeral: Whether to send as ephemeral message
+    """
+    if not embeds:
+        return
+    
+    # Create view with pagination buttons
+    class PaginationView(discord.ui.View):
+        def __init__(self, embeds: List[discord.Embed], timeout: int):
+            super().__init__(timeout=timeout)
+            self.embeds = embeds
+            self.current_page = 0
+            self.total_pages = len(embeds)
+            self._update_buttons()
+        
+        def _update_buttons(self):
+            # Update button states based on current page
+            self.first_page.disabled = self.current_page == 0
+            self.prev_page.disabled = self.current_page == 0
+            self.next_page.disabled = self.current_page == self.total_pages - 1
+            self.last_page.disabled = self.current_page == self.total_pages - 1
+            
+            # Update page counter
+            self.page_counter.label = f"{self.current_page + 1}/{self.total_pages}"
+        
+        async def _update_message(self, interaction: discord.Interaction):
+            # Update footer with page information
+            embed = self.embeds[self.current_page]
+            footer_text = embed.footer.text or EmbedBuilder.DEFAULT_FOOTER
+            
+            if not footer_text.endswith(f" • Page {self.current_page + 1}/{self.total_pages}"):
+                footer_text = f"{footer_text} • Page {self.current_page + 1}/{self.total_pages}"
+                embed.set_footer(text=footer_text, icon_url=embed.footer.icon_url)
+            
+            # Update buttons
+            self._update_buttons()
+            
+            # Send update
+            await interaction.response.edit_message(embed=embed, view=self)
+        
+        @discord.ui.button(label="<<", style=discord.ButtonStyle.grey)
+        async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = 0
+            await self._update_message(interaction)
+        
+        @discord.ui.button(label="<", style=discord.ButtonStyle.blurple)
+        async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = max(0, self.current_page - 1)
+            await self._update_message(interaction)
+        
+        @discord.ui.button(label="1/1", style=discord.ButtonStyle.grey, disabled=True)
+        async def page_counter(self, interaction: discord.Interaction, button: discord.ui.Button):
+            # This button is just a counter, doesn't do anything
+            await interaction.response.defer()
+        
+        @discord.ui.button(label=">", style=discord.ButtonStyle.blurple)
+        async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = min(self.total_pages - 1, self.current_page + 1)
+            await self._update_message(interaction)
+        
+        @discord.ui.button(label=">>", style=discord.ButtonStyle.grey)
+        async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+            self.current_page = self.total_pages - 1
+            await self._update_message(interaction)
+        
+        async def on_timeout(self):
+            # Disable all buttons on timeout
+            for item in self.children:
+                item.disabled = True
+            
+            # Try to update the message (may fail if message is deleted)
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+    
+    # If only one embed, just send it without pagination
+    if len(embeds) == 1:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embeds[0], ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(embed=embeds[0], ephemeral=ephemeral)
+        return
+    
+    # Create view for pagination
+    view = PaginationView(embeds, timeout=timeout)
+    
+    # Add page number to first embed footer
+    first_embed = embeds[0]
+    footer_text = first_embed.footer.text or EmbedBuilder.DEFAULT_FOOTER
+    footer_text = f"{footer_text} • Page 1/{len(embeds)}"
+    first_embed.set_footer(text=footer_text, icon_url=first_embed.footer.icon_url)
+    
+    # Send message with pagination
+    if interaction.response.is_done():
+        msg = await interaction.followup.send(embed=first_embed, view=view, ephemeral=ephemeral)
+    else:
+        await interaction.response.send_message(embed=first_embed, view=view, ephemeral=ephemeral)
+        msg = await interaction.original_response()
+    
+    # Store message for later reference (used in on_timeout)
+    view.message = msg
 
-        return True
+def format_timedelta(seconds: int) -> str:
+    """Format seconds as human-readable time
+    
+    Args:
+        seconds: Number of seconds
+        
+    Returns:
+        str: Formatted time string
+    """
+    if seconds < 60:
+        return f"{seconds} seconds"
+    
+    minutes = seconds // 60
+    seconds %= 60
+    
+    if minutes < 60:
+        if seconds == 0:
+            return f"{minutes} minutes"
+        return f"{minutes} minutes, {seconds} seconds"
+    
+    hours = minutes // 60
+    minutes %= 60
+    
+    if hours < 24:
+        if minutes == 0:
+            return f"{hours} hours"
+        return f"{hours} hours, {minutes} minutes"
+    
+    days = hours // 24
+    hours %= 24
+    
+    if days < 7:
+        if hours == 0:
+            return f"{days} days"
+        return f"{days} days, {hours} hours"
+    
+    weeks = days // 7
+    days %= 7
+    
+    if weeks < 4:
+        if days == 0:
+            return f"{weeks} weeks"
+        return f"{weeks} weeks, {days} days"
+    
+    months = days // 30
+    weeks %= 4
+    
+    if months == 0:
+        return f"{weeks} weeks"
+    if weeks == 0:
+        return f"{months} months"
+    
+    return f"{months} months, {weeks} weeks"
 
-    except discord.Forbidden:
-        logger.error(f"Missing permissions to edit voice channel in guild {guild_id}")
-        return False
-    except Exception as e:
-        logger.error(f"Error updating voice channel name: {e}", exc_info=True)
-        return False
-
-def parse_sftp_url(url: str) -> Dict[str, Any]:
-    """Parse an SFTP URL into components"""
-    # Pattern: sftp://username:password@host:port
-    pattern = r"sftp://([^:]+):([^@]+)@([^:]+):(\d+)"
-    match = re.match(pattern, url)
-
-    if not match:
-        return None
-
-    username, password, host, port = match.groups()
-
-    return {
-        "host": host,
-        "port": int(port),
-        "username": username,
-        "password": password
-    }
-
-def format_time_ago(timestamp: datetime) -> str:
-    """Format a timestamp as a relative time (e.g., '5 minutes ago')"""
-    now = datetime.utcnow()
-    delta = now - timestamp
-
-    if delta.days > 0:
-        return f"{delta.days} day{'s' if delta.days != 1 else ''} ago"
-
-    hours = delta.seconds // 3600
-    if hours > 0:
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
-
-    minutes = (delta.seconds // 60) % 60
-    if minutes > 0:
-        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-
-    return "just now"
-
-def has_admin_permission(ctx) -> bool:
-    """Check if user has admin permission"""
-    # Guild owner always has permission
-    if ctx.author.id == ctx.guild.owner_id:
-        return True
-
-    # Check for administrator permission
-    if ctx.author.guild_permissions.administrator:
-        return True
-
-    # Check for specific admin role
-    admin_role_id = get_admin_role_id(ctx.guild.id)
-    if admin_role_id and admin_role_id in [role.id for role in ctx.author.roles]:
-        return True
-
-    return False
-
-async def get_admin_role_id(bot, guild_id: int) -> Optional[int]:
-    """Get the admin role ID for a guild"""
-    guild_data = await bot.db.guilds.find_one({"guild_id": guild_id})
-    if not guild_data:
-        return None
-
-    return guild_data.get("admin_role_id")
-
-def is_home_guild_admin(bot, user_id: int) -> bool:
-    """Check if user is an admin in the home guild"""
-    if not bot.home_guild_id:
-        return False
-
-    # Bot owner is always a home guild admin
-    if user_id == bot.owner_id:
-        return True
-
-    # Get home guild
-    home_guild = bot.get_guild(bot.home_guild_id)
-    if not home_guild:
-        return False
-
-    # Get member in home guild
-    member = home_guild.get_member(user_id)
-    if not member:
-        return False
-
-    # Guild owner is admin
-    if member.id == home_guild.owner_id:
-        return True
-
-    # Check for administrator permission
-    if member.guild_permissions.administrator:
-        return True
-
-    return False
+def trim_string(text: str, max_length: int = 1024, ellipsis: str = "...") -> str:
+    """Trim a string to fit within Discord embed limits
+    
+    Args:
+        text: Text to trim
+        max_length: Maximum length
+        ellipsis: String to add at the end if trimmed
+        
+    Returns:
+        str: Trimmed string
+    """
+    if len(text) <= max_length:
+        return text
+    
+    return text[:max_length - len(ellipsis)] + ellipsis

@@ -1,22 +1,35 @@
 """
 Bot initialization and configuration
+
+This module provides:
+1. Enhanced bot initialization with proper error handling
+2. Optimized command registration and event handling
+3. Background task management with automatic recovery
+4. Centralized error handling and logging
 """
 import os
 import logging
 import discord
 from discord.ext import commands
 import asyncio
+import traceback
+from datetime import datetime
+from typing import Optional, Dict, List, Any
 
 from config import COMMAND_PREFIX, INTENTS, ACTIVITY
-from utils.db import initialize_db
+from utils.database import Database
+from utils.async_utils import BackgroundTask, with_timeout
 
 logger = logging.getLogger(__name__)
 
 async def initialize_bot(force_sync=False):
-    """Initialize and configure the Discord bot instance
+    """Initialize and configure the Discord bot instance with enhanced error handling
     
     Args:
         force_sync: Force a full sync of commands globally
+        
+    Returns:
+        commands.Bot: Configured bot instance
     """
     
     # Set up intents
@@ -39,10 +52,18 @@ async def initialize_bot(force_sync=False):
     
     # Store the force_sync flag for later use
     bot.force_sync = force_sync
+    
+    # Setup BackgroundTask event loop
+    BackgroundTask.set_event_loop(asyncio.get_event_loop())
 
-    # Initialize database connection
-    db = await initialize_db()
-    bot.db = db
+    # Initialize database connection with enhanced resilience
+    connected = await Database.connect()
+    if not connected:
+        logger.error("Failed to connect to database. Exiting.")
+        raise ConnectionError("Could not connect to MongoDB database")
+    
+    # Store database connection in bot for easy access
+    bot.db = Database
 
     # Store important bot variables
     bot.home_guild_id = 0
@@ -141,7 +162,10 @@ async def load_extensions(bot):
         "cogs.setup",
         "cogs.premium",
         "cogs.economy",
-        "cogs.help"  # New help cog for comprehensive command documentation
+        "cogs.factions",      # Factions cog for faction system
+        "cogs.player_links",  # Player links cog for character linking
+        "cogs.rivalries",     # Rivalries cog for rivalry tracking
+        "cogs.help"           # Help cog for comprehensive command documentation
     ]
     
     for extension in extensions:
