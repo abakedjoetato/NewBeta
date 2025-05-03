@@ -1,10 +1,11 @@
 """
-Embed builder module for the Tower of Temptation PvP Statistics Discord Bot.
+Embed Builder for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. EmbedBuilder class for creating consistent themed embeds
-2. Predefined color schemes and styles
-3. Utility methods for various embed types
+1. Standard embed generation
+2. Themed embed styles
+3. Common embed layouts
+4. Utility functions for embed creation
 """
 import logging
 import random
@@ -16,681 +17,464 @@ import discord
 logger = logging.getLogger(__name__)
 
 class EmbedBuilder:
-    """EmbedBuilder class for creating consistent themed embeds"""
+    """Utility class for building Discord embeds"""
     
-    # Discord embed color constants
-    BLUE_COLOR = 0x3498DB
-    RED_COLOR = 0xE74C3C
-    GREEN_COLOR = 0x2ECC71
-    GOLD_COLOR = 0xF1C40F
-    PURPLE_COLOR = 0x9B59B6
-    ORANGE_COLOR = 0xE67E22
-    TEAL_COLOR = 0x1ABC9C
-    DARK_BLUE_COLOR = 0x206694
-    DEFAULT_COLOR = 0x7289DA
-    ERROR_COLOR = 0xFF0000
+    # Embed color palette
+    COLORS = {
+        "primary": 0x3498db,    # Blue
+        "success": 0x2ecc71,    # Green
+        "warning": 0xf39c12,    # Orange
+        "error": 0xe74c3c,      # Red
+        "info": 0x9b59b6,       # Purple
+        "neutral": 0x95a5a6,    # Gray
+        "faction_a": 0xe74c3c,  # Red for Faction A
+        "faction_b": 0x3498db,  # Blue for Faction B
+        
+        # Additional colors for variety
+        "gold": 0xf1c40f,
+        "silver": 0xbdc3c7,
+        "bronze": 0xcd6133,
+        "emerald": 0x2ecc71,
+        "ruby": 0xe74c3c,
+        "sapphire": 0x3498db,
+        "amethyst": 0x9b59b6,
+        "topaz": 0xf39c12,
+        "diamond": 0x1abc9c,
+    }
     
-    # Bot branding constants
-    DEFAULT_ICON_URL = "https://cdn.discordapp.com/emojis/1111111111111111111.png"  # Replace with actual default icon
-    DEFAULT_FOOTER = "Tower of Temptation PvP Stats"
-    
-    # Faction color mapping
-    FACTION_COLORS = {
-        "red": RED_COLOR,
-        "blue": BLUE_COLOR,
-        "green": GREEN_COLOR,
-        "gold": GOLD_COLOR,
-        "purple": PURPLE_COLOR,
-        "orange": ORANGE_COLOR,
-        "teal": TEAL_COLOR,
-        "dark_blue": DARK_BLUE_COLOR
+    # Common icons
+    ICONS = {
+        "success": "https://i.imgur.com/FcaXvqo.png",  # Green checkmark
+        "warning": "https://i.imgur.com/rYMeoCZ.png",  # Yellow warning
+        "error": "https://i.imgur.com/gfo8TJj.png",    # Red error
+        "info": "https://i.imgur.com/wMFN7Qj.png",     # Blue info
+        "neutral": "https://i.imgur.com/ViHN3X2.png",  # Gray neutral
+        "sword": "https://i.imgur.com/JGocbFP.png",    # Sword icon
+        "shield": "https://i.imgur.com/4HkY3BB.png",   # Shield icon
+        "trophy": "https://i.imgur.com/lPJeQXG.png",   # Trophy icon
+        "skull": "https://i.imgur.com/X8QUQxS.png",    # Skull icon
+        "crown": "https://i.imgur.com/TzUnLSU.png",    # Crown icon
+        "stats": "https://i.imgur.com/YVgjUHM.png",    # Stats icon
+        "settings": "https://i.imgur.com/K4JZrZ4.png", # Settings icon
+        "faction_a": "https://i.imgur.com/DLXqXXa.png", # Faction A icon (placeholder)
+        "faction_b": "https://i.imgur.com/2uDQ7m1.png", # Faction B icon (placeholder)
     }
     
     @classmethod
-    def primary(
-        cls,
-        title: str,
-        description: Optional[str] = None,
-        timestamp: bool = True,
-        color: Optional[int] = None,
-        footer: Optional[str] = None,
-        footer_icon: Optional[str] = None,
-        thumbnail: Optional[str] = None,
-        image: Optional[str] = None,
-        author_name: Optional[str] = None,
-        author_icon: Optional[str] = None,
-        author_url: Optional[str] = None,
-        fields: Optional[List[Dict[str, Any]]] = None
-    ) -> discord.Embed:
-        """Create a primary styled embed
+    async def create_embed(cls, 
+                          title: Optional[str] = None, 
+                          description: Optional[str] = None, 
+                          color: Optional[int] = None,
+                          fields: Optional[List[Dict[str, Any]]] = None,
+                          thumbnail_url: Optional[str] = None,
+                          image_url: Optional[str] = None,
+                          author_name: Optional[str] = None,
+                          author_url: Optional[str] = None,
+                          author_icon_url: Optional[str] = None,
+                          footer_text: Optional[str] = None,
+                          footer_icon_url: Optional[str] = None,
+                          timestamp: Optional[datetime] = None,
+                          url: Optional[str] = None) -> discord.Embed:
+        """Create a Discord embed with the given parameters
         
         Args:
-            title: Embed title
-            description: Embed description (optional)
-            timestamp: Whether to add timestamp (default: True)
-            color: Embed color (optional - defaults to PRIMARY_COLOR)
-            footer: Footer text (optional)
-            footer_icon: Footer icon URL (optional)
-            thumbnail: Thumbnail URL (optional)
-            image: Image URL (optional)
-            author_name: Author name (optional)
-            author_icon: Author icon URL (optional)
-            author_url: Author URL (optional)
-            fields: List of field dictionaries (optional)
+            title: Embed title (default: None)
+            description: Embed description (default: None)
+            color: Embed color (default: None)
+            fields: List of field dictionaries with name, value, and inline keys (default: None)
+            thumbnail_url: URL for thumbnail image (default: None)
+            image_url: URL for main image (default: None)
+            author_name: Name for author field (default: None)
+            author_url: URL for author field (default: None)
+            author_icon_url: Icon URL for author field (default: None)
+            footer_text: Text for footer (default: None)
+            footer_icon_url: Icon URL for footer (default: None)
+            timestamp: Timestamp to display (default: None)
+            url: URL for title (default: None)
             
         Returns:
             discord.Embed: Created embed
         """
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=color or cls.DEFAULT_COLOR
-        )
+        # Create embed with color or default
+        embed = discord.Embed(color=color or cls.COLORS["primary"])
         
-        if timestamp:
-            embed.timestamp = datetime.utcnow()
+        # Set title and description if provided
+        if title:
+            embed.title = title
+            
+        if description:
+            embed.description = description
+            
+        if url:
+            embed.url = url
         
-        # Add footer
-        if footer or footer_icon:
-            embed.set_footer(
-                text=footer or cls.DEFAULT_FOOTER,
-                icon_url=footer_icon
-            )
-        
-        # Add thumbnail
-        if thumbnail:
-            embed.set_thumbnail(url=thumbnail)
-        
-        # Add image
-        if image:
-            embed.set_image(url=image)
-        
-        # Add author
-        if author_name:
-            embed.set_author(
-                name=author_name,
-                icon_url=author_icon,
-                url=author_url
-            )
-        
-        # Add fields
+        # Add fields if provided
         if fields:
             for field in fields:
                 embed.add_field(
-                    name=field.get("name", ""),
-                    value=field.get("value", ""),
+                    name=field["name"],
+                    value=field["value"],
                     inline=field.get("inline", False)
                 )
         
+        # Set thumbnail if provided
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+            
+        # Set image if provided
+        if image_url:
+            embed.set_image(url=image_url)
+            
+        # Set author if provided
+        if author_name:
+            embed.set_author(
+                name=author_name,
+                url=author_url,
+                icon_url=author_icon_url
+            )
+            
+        # Set footer if provided
+        if footer_text:
+            embed.set_footer(
+                text=footer_text,
+                icon_url=footer_icon_url
+            )
+            
+        # Set timestamp if provided
+        if timestamp:
+            embed.timestamp = timestamp
+        
         return embed
     
     @classmethod
-    def info(
-        cls,
-        title: str,
-        description: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create an info styled embed
+    async def success_embed(cls, 
+                           title: Optional[str] = None, 
+                           description: Optional[str] = None,
+                           thumbnail: bool = False,
+                           **kwargs) -> discord.Embed:
+        """Create a success-themed embed
         
         Args:
-            title: Embed title
-            description: Embed description (optional)
-            **kwargs: Additional arguments for primary method
+            title: Embed title (default: None)
+            description: Embed description (default: None)
+            thumbnail: Whether to show success icon as thumbnail (default: False)
+            **kwargs: Additional arguments for create_embed
             
         Returns:
-            discord.Embed: Created embed
+            discord.Embed: Success-themed embed
         """
-        kwargs.setdefault("color", cls.BLUE_COLOR)
-        return cls.primary(title, description, **kwargs)
-    
-    @classmethod
-    def success(
-        cls,
-        title: str,
-        description: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a success styled embed
+        # Set success color
+        kwargs["color"] = cls.COLORS["success"]
         
-        Args:
-            title: Embed title
-            description: Embed description (optional)
-            **kwargs: Additional arguments for primary method
+        # Add success icon as thumbnail if requested
+        if thumbnail and "thumbnail_url" not in kwargs:
+            kwargs["thumbnail_url"] = cls.ICONS["success"]
             
-        Returns:
-            discord.Embed: Created embed
-        """
-        kwargs.setdefault("color", cls.GREEN_COLOR)
-        return cls.primary(title, description, **kwargs)
-    
-    @classmethod
-    def error(
-        cls,
-        title: str,
-        description: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create an error styled embed
-        
-        Args:
-            title: Embed title
-            description: Embed description (optional)
-            **kwargs: Additional arguments for primary method
+        # Set default title if not provided
+        if not title:
+            title = "Success"
             
-        Returns:
-            discord.Embed: Created embed
-        """
-        kwargs.setdefault("color", cls.ERROR_COLOR)
-        return cls.primary(title, description, **kwargs)
-    
-    @classmethod
-    def warning(
-        cls,
-        title: str,
-        description: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a warning styled embed
-        
-        Args:
-            title: Embed title
-            description: Embed description (optional)
-            **kwargs: Additional arguments for primary method
-            
-        Returns:
-            discord.Embed: Created embed
-        """
-        kwargs.setdefault("color", cls.ORANGE_COLOR)
-        return cls.primary(title, description, **kwargs)
-    
-    @classmethod
-    def faction(
-        cls,
-        faction_name: str,
-        faction_tag: str,
-        description: Optional[str] = None,
-        color: Optional[int] = None,
-        icon_url: Optional[str] = None,
-        banner_url: Optional[str] = None,
-        member_count: Optional[int] = None,
-        stats: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a faction styled embed
-        
-        Args:
-            faction_name: Faction name
-            faction_tag: Faction tag
-            description: Faction description (optional)
-            color: Faction color (optional)
-            icon_url: Faction icon URL (optional)
-            banner_url: Faction banner URL (optional)
-            member_count: Faction member count (optional)
-            stats: Faction stats (optional)
-            **kwargs: Additional arguments for primary method
-            
-        Returns:
-            discord.Embed: Created embed
-        """
-        # Set title with faction tag
-        title = f"{faction_name} [{faction_tag}]"
-        
-        # Create embed
-        embed = cls.primary(
+        return await cls.create_embed(
             title=title,
             description=description,
-            color=color or cls.DEFAULT_COLOR,
-            thumbnail=icon_url,
-            image=banner_url,
             **kwargs
         )
-        
-        # Add member count
-        if member_count is not None:
-            embed.add_field(
-                name="Members",
-                value=str(member_count),
-                inline=True
-            )
-        
-        # Add stats
-        if stats:
-            for stat_name, stat_value in stats.items():
-                if isinstance(stat_value, (int, float)):
-                    embed.add_field(
-                        name=stat_name.replace("_", " ").title(),
-                        value=str(stat_value),
-                        inline=True
-                    )
-        
-        return embed
     
     @classmethod
-    def player(
-        cls,
-        player_name: str,
-        server_name: str,
-        description: Optional[str] = None,
-        avatar_url: Optional[str] = None,
-        stats: Optional[Dict[str, Any]] = None,
-        rank: Optional[int] = None,
-        faction: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a player styled embed
+    async def error_embed(cls, 
+                         title: Optional[str] = None, 
+                         description: Optional[str] = None,
+                         thumbnail: bool = False,
+                         **kwargs) -> discord.Embed:
+        """Create an error-themed embed
+        
+        Args:
+            title: Embed title (default: None)
+            description: Embed description (default: None)
+            thumbnail: Whether to show error icon as thumbnail (default: False)
+            **kwargs: Additional arguments for create_embed
+            
+        Returns:
+            discord.Embed: Error-themed embed
+        """
+        # Set error color
+        kwargs["color"] = cls.COLORS["error"]
+        
+        # Add error icon as thumbnail if requested
+        if thumbnail and "thumbnail_url" not in kwargs:
+            kwargs["thumbnail_url"] = cls.ICONS["error"]
+            
+        # Set default title if not provided
+        if not title:
+            title = "Error"
+            
+        return await cls.create_embed(
+            title=title,
+            description=description,
+            **kwargs
+        )
+    
+    @classmethod
+    async def warning_embed(cls, 
+                           title: Optional[str] = None, 
+                           description: Optional[str] = None,
+                           thumbnail: bool = False,
+                           **kwargs) -> discord.Embed:
+        """Create a warning-themed embed
+        
+        Args:
+            title: Embed title (default: None)
+            description: Embed description (default: None)
+            thumbnail: Whether to show warning icon as thumbnail (default: False)
+            **kwargs: Additional arguments for create_embed
+            
+        Returns:
+            discord.Embed: Warning-themed embed
+        """
+        # Set warning color
+        kwargs["color"] = cls.COLORS["warning"]
+        
+        # Add warning icon as thumbnail if requested
+        if thumbnail and "thumbnail_url" not in kwargs:
+            kwargs["thumbnail_url"] = cls.ICONS["warning"]
+            
+        # Set default title if not provided
+        if not title:
+            title = "Warning"
+            
+        return await cls.create_embed(
+            title=title,
+            description=description,
+            **kwargs
+        )
+    
+    @classmethod
+    async def info_embed(cls, 
+                        title: Optional[str] = None, 
+                        description: Optional[str] = None,
+                        thumbnail: bool = False,
+                        **kwargs) -> discord.Embed:
+        """Create an info-themed embed
+        
+        Args:
+            title: Embed title (default: None)
+            description: Embed description (default: None)
+            thumbnail: Whether to show info icon as thumbnail (default: False)
+            **kwargs: Additional arguments for create_embed
+            
+        Returns:
+            discord.Embed: Info-themed embed
+        """
+        # Set info color
+        kwargs["color"] = cls.COLORS["info"]
+        
+        # Add info icon as thumbnail if requested
+        if thumbnail and "thumbnail_url" not in kwargs:
+            kwargs["thumbnail_url"] = cls.ICONS["info"]
+            
+        # Set default title if not provided
+        if not title:
+            title = "Information"
+            
+        return await cls.create_embed(
+            title=title,
+            description=description,
+            **kwargs
+        )
+    
+    @classmethod
+    async def player_stats_embed(cls, 
+                                player_name: str, 
+                                stats: Dict[str, Any], 
+                                avatar_url: Optional[str] = None,
+                                faction_color: Optional[int] = None) -> discord.Embed:
+        """Create a player statistics embed
         
         Args:
             player_name: Player name
-            server_name: Server name
-            description: Player description (optional)
-            avatar_url: Player avatar URL (optional)
-            stats: Player stats (optional)
-            rank: Player rank (optional)
-            faction: Player faction (optional)
-            **kwargs: Additional arguments for primary method
+            stats: Player statistics dictionary
+            avatar_url: Player avatar URL (default: None)
+            faction_color: Faction color (default: None)
             
         Returns:
-            discord.Embed: Created embed
+            discord.Embed: Player statistics embed
         """
-        # Set title with rank if available
-        if rank:
-            title = f"#{rank} {player_name}"
-        else:
-            title = player_name
+        # Set color based on faction or default
+        color = faction_color or cls.COLORS["primary"]
         
-        # Set color based on faction if available
-        color = cls.DEFAULT_COLOR
-        if faction and "color" in faction:
-            color = faction.get("color")
+        # Format player stats
+        fields = [
+            {"name": "Kills", "value": str(stats.get("kills", 0)), "inline": True},
+            {"name": "Deaths", "value": str(stats.get("deaths", 0)), "inline": True},
+            {"name": "K/D Ratio", "value": f"{stats.get('kd_ratio', 0.0):.2f}", "inline": True},
+            {"name": "Favorite Weapon", "value": stats.get("favorite_weapon", "None"), "inline": True},
+            {"name": "Longest Kill", "value": f"{stats.get('longest_kill', 0)}m", "inline": True},
+            {"name": "Playtime", "value": stats.get("playtime", "0h"), "inline": True},
+        ]
         
+        # Add additional stats if available
+        if "level" in stats:
+            fields.append({"name": "Level", "value": str(stats["level"]), "inline": True})
+            
+        if "rank" in stats:
+            fields.append({"name": "Rank", "value": f"#{stats['rank']}", "inline": True})
+            
         # Create embed
-        embed = cls.primary(
-            title=title,
-            description=description,
+        return await cls.create_embed(
+            title=f"{player_name}'s Statistics",
             color=color,
-            thumbnail=avatar_url,
-            **kwargs
+            fields=fields,
+            thumbnail_url=avatar_url or cls.ICONS["stats"],
+            footer_text="Last updated",
+            timestamp=datetime.utcnow()
         )
-        
-        # Add server
-        embed.add_field(
-            name="Server",
-            value=server_name,
-            inline=True
-        )
-        
-        # Add faction
-        if faction:
-            faction_text = f"{faction.get('name')} [{faction.get('tag')}]"
-            embed.add_field(
-                name="Faction",
-                value=faction_text,
-                inline=True
-            )
-        
-        # Add stats
-        if stats:
-            # First add kills and deaths
-            if "kills" in stats:
-                embed.add_field(
-                    name="Kills",
-                    value=str(stats.get("kills", 0)),
-                    inline=True
-                )
-            
-            if "deaths" in stats:
-                embed.add_field(
-                    name="Deaths",
-                    value=str(stats.get("deaths", 0)),
-                    inline=True
-                )
-            
-            # Calculate and add K/D ratio
-            kills = stats.get("kills", 0)
-            deaths = stats.get("deaths", 0)
-            if kills or deaths:
-                kd_ratio = kills / max(deaths, 1)
-                embed.add_field(
-                    name="K/D Ratio",
-                    value=f"{kd_ratio:.2f}",
-                    inline=True
-                )
-            
-            # Add other stats
-            for stat_name, stat_value in stats.items():
-                if stat_name not in ["kills", "deaths"] and isinstance(stat_value, (int, float)):
-                    embed.add_field(
-                        name=stat_name.replace("_", " ").title(),
-                        value=str(stat_value),
-                        inline=True
-                    )
-        
-        return embed
     
     @classmethod
-    def rivalry(
-        cls,
-        player1_name: str,
-        player2_name: str,
-        player1_kills: int,
-        player2_kills: int,
-        total_kills: int,
-        description: Optional[str] = None,
-        player1_avatar: Optional[str] = None,
-        player2_avatar: Optional[str] = None,
-        last_kill: Optional[datetime] = None,
-        last_weapon: Optional[str] = None,
-        last_location: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a rivalry styled embed
+    async def faction_stats_embed(cls, 
+                                faction_name: str, 
+                                stats: Dict[str, Any], 
+                                faction_icon: Optional[str] = None,
+                                faction_color: Optional[int] = None) -> discord.Embed:
+        """Create a faction statistics embed
         
         Args:
-            player1_name: First player name
-            player2_name: Second player name
-            player1_kills: First player kills
-            player2_kills: Second player kills
-            total_kills: Total kills
-            description: Rivalry description (optional)
-            player1_avatar: First player avatar URL (optional)
-            player2_avatar: Second player avatar URL (optional)
-            last_kill: Last kill timestamp (optional)
-            last_weapon: Last weapon used (optional)
-            last_location: Last kill location (optional)
-            **kwargs: Additional arguments for primary method
+            faction_name: Faction name
+            stats: Faction statistics dictionary
+            faction_icon: Faction icon URL (default: None)
+            faction_color: Faction color (default: None)
             
         Returns:
-            discord.Embed: Created embed
+            discord.Embed: Faction statistics embed
         """
-        # Set title and colors
-        title = f"{player1_name} vs {player2_name}"
-        
-        if player1_kills > player2_kills:
-            color = cls.RED_COLOR  # Player 1 leading
-            score_text = f"**{player1_kills}** : {player2_kills}"
-        elif player2_kills > player1_kills:
-            color = cls.BLUE_COLOR  # Player 2 leading
-            score_text = f"{player1_kills} : **{player2_kills}**"
+        # Set color based on faction or default
+        if faction_color:
+            color = faction_color
+        elif faction_name.lower() == "faction a":
+            color = cls.COLORS["faction_a"]
+        elif faction_name.lower() == "faction b":
+            color = cls.COLORS["faction_b"]
         else:
-            color = cls.GOLD_COLOR  # Tied
-            score_text = f"**{player1_kills}** : **{player2_kills}**"
+            color = cls.COLORS["primary"]
         
-        # Calculate intensity score
-        if total_kills <= 1:
-            intensity = 0
+        # Set icon based on faction or default
+        if faction_icon:
+            icon = faction_icon
+        elif faction_name.lower() == "faction a":
+            icon = cls.ICONS["faction_a"]
+        elif faction_name.lower() == "faction b":
+            icon = cls.ICONS["faction_b"]
         else:
-            score_diff = abs(player1_kills - player2_kills)
-            balance = 1.0 - (score_diff / total_kills)
-            intensity = total_kills * (balance ** 2)
+            icon = cls.ICONS["stats"]
         
-        # Create rivalry description
-        if not description:
-            # Generate different descriptions based on the intensity
-            if intensity >= 20:
-                description = "🔥 This rivalry is heating up with fierce competition!"
-            elif intensity >= 10:
-                description = "⚔️ A developing rivalry with consistent engagement."
-            elif intensity >= 5:
-                description = "👀 A budding rivalry worth keeping an eye on."
-            else:
-                description = "🏁 A new rivalry has begun."
+        # Format faction stats
+        fields = [
+            {"name": "Members", "value": str(stats.get("members", 0)), "inline": True},
+            {"name": "Total Kills", "value": str(stats.get("total_kills", 0)), "inline": True},
+            {"name": "Total Deaths", "value": str(stats.get("total_deaths", 0)), "inline": True},
+            {"name": "K/D Ratio", "value": f"{stats.get('kd_ratio', 0.0):.2f}", "inline": True},
+            {"name": "Territory", "value": stats.get("territory", "None"), "inline": True},
+            {"name": "Ranking", "value": f"#{stats.get('rank', 0)}", "inline": True},
+        ]
+        
+        # Add top players if available
+        if "top_players" in stats and stats["top_players"]:
+            top_players = "\n".join([f"{i+1}. {player}" for i, player in enumerate(stats["top_players"])])
+            fields.append({"name": "Top Players", "value": top_players, "inline": False})
         
         # Create embed
-        embed = cls.primary(
-            title=title,
-            description=description,
+        return await cls.create_embed(
+            title=f"{faction_name} Statistics",
             color=color,
-            **kwargs
+            fields=fields,
+            thumbnail_url=icon,
+            footer_text="Last updated",
+            timestamp=datetime.utcnow()
         )
-        
-        # Add score field
-        embed.add_field(
-            name="Score",
-            value=score_text,
-            inline=False
-        )
-        
-        # Add total encounters
-        embed.add_field(
-            name="Total Encounters",
-            value=str(total_kills),
-            inline=True
-        )
-        
-        # Add intensity rating
-        embed.add_field(
-            name="Intensity Rating",
-            value=f"{intensity:.1f}/100",
-            inline=True
-        )
-        
-        # Add last kill details
-        if last_kill:
-            # Format last kill details
-            kill_details = []
-            
-            if last_weapon:
-                kill_details.append(f"Weapon: {last_weapon}")
-            
-            if last_location:
-                kill_details.append(f"Location: {last_location}")
-            
-            # Add last kill field
-            embed.add_field(
-                name="Last Kill",
-                value="\n".join(kill_details) if kill_details else "No details available",
-                inline=False
-            )
-            
-            # Set timestamp to last kill
-            embed.timestamp = last_kill
-        
-        return embed
     
     @classmethod
-    def server(
-        cls,
-        server_name: str,
-        description: Optional[str] = None,
-        icon_url: Optional[str] = None,
-        player_count: Optional[int] = None,
-        top_players: Optional[List[Dict[str, Any]]] = None,
-        stats: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a server styled embed
-        
-        Args:
-            server_name: Server name
-            description: Server description (optional)
-            icon_url: Server icon URL (optional)
-            player_count: Player count (optional)
-            top_players: Top players (optional)
-            stats: Server stats (optional)
-            **kwargs: Additional arguments for primary method
-            
-        Returns:
-            discord.Embed: Created embed
-        """
-        # Create embed
-        embed = cls.primary(
-            title=server_name,
-            description=description,
-            color=cls.TEAL_COLOR,
-            thumbnail=icon_url,
-            **kwargs
-        )
-        
-        # Add player count
-        if player_count is not None:
-            embed.add_field(
-                name="Players",
-                value=str(player_count),
-                inline=True
-            )
-        
-        # Add stats
-        if stats:
-            for stat_name, stat_value in stats.items():
-                if isinstance(stat_value, (int, float)):
-                    embed.add_field(
-                        name=stat_name.replace("_", " ").title(),
-                        value=str(stat_value),
-                        inline=True
-                    )
-        
-        # Add top players
-        if top_players and len(top_players) > 0:
-            # Format top players as list
-            top_players_text = ""
-            for i, player in enumerate(top_players[:5], 1):
-                player_name = player.get("name", "Unknown")
-                kills = player.get("kills", 0)
-                top_players_text += f"#{i} **{player_name}** - {kills} kills\n"
-            
-            embed.add_field(
-                name="Top Players",
-                value=top_players_text,
-                inline=False
-            )
-        
-        return embed
-    
-    @classmethod
-    def leaderboard(
-        cls,
-        title: str,
-        entries: List[Dict[str, Any]],
-        description: Optional[str] = None,
-        value_name: str = "Kills",
-        max_entries: int = 10,
-        thumbnail: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a leaderboard styled embed
+    async def leaderboard_embed(cls, 
+                              title: str, 
+                              leaderboard: List[Dict[str, Any]],
+                              color: Optional[int] = None,
+                              icon: Optional[str] = None) -> discord.Embed:
+        """Create a leaderboard embed
         
         Args:
             title: Leaderboard title
-            entries: Leaderboard entries
-            description: Leaderboard description (optional)
-            value_name: Name of value field (default: Kills)
-            max_entries: Maximum number of entries to show (default: 10)
-            thumbnail: Thumbnail URL (optional)
-            **kwargs: Additional arguments for primary method
+            leaderboard: List of player/faction dictionaries with name, value, and rank
+            color: Embed color (default: None)
+            icon: Icon URL (default: None)
             
         Returns:
-            discord.Embed: Created embed
+            discord.Embed: Leaderboard embed
         """
+        # Set default color
+        color = color or cls.COLORS["gold"]
+        
+        # Set default icon
+        icon = icon or cls.ICONS["trophy"]
+        
+        # Format leaderboard
+        description = ""
+        
+        for i, entry in enumerate(leaderboard[:10]):  # Show top 10
+            # Generate medal emoji for top 3
+            if i == 0:
+                medal = "🥇"
+            elif i == 1:
+                medal = "🥈"
+            elif i == 2:
+                medal = "🥉"
+            else:
+                medal = f"`{i+1}.`"
+                
+            # Add entry to description
+            description += f"{medal} **{entry['name']}** - {entry['value']}\n"
+        
         # Create embed
-        embed = cls.primary(
+        return await cls.create_embed(
             title=title,
             description=description,
-            color=cls.GOLD_COLOR,
-            thumbnail=thumbnail,
-            **kwargs
+            color=color,
+            thumbnail_url=icon,
+            footer_text="Last updated",
+            timestamp=datetime.utcnow()
         )
-        
-        # Add leaderboard entries
-        if entries:
-            # Format entries as fields or single field
-            if len(entries) <= 3:
-                # Format as separate fields
-                for i, entry in enumerate(entries[:max_entries], 1):
-                    name = entry.get("name", "Unknown")
-                    value = entry.get("value", 0)
-                    
-                    embed.add_field(
-                        name=f"#{i} {name}",
-                        value=f"{value} {value_name}",
-                        inline=True
-                    )
-            else:
-                # Format as single field
-                leaderboard_text = ""
-                for i, entry in enumerate(entries[:max_entries], 1):
-                    name = entry.get("name", "Unknown")
-                    value = entry.get("value", 0)
-                    
-                    leaderboard_text += f"**#{i}** {name} - {value} {value_name}\n"
-                
-                embed.add_field(
-                    name="Leaderboard",
-                    value=leaderboard_text,
-                    inline=False
-                )
-        else:
-            embed.add_field(
-                name="No entries",
-                value="The leaderboard is currently empty.",
-                inline=False
-            )
-        
-        return embed
     
     @classmethod
-    def paginated(
-        cls,
-        title: str,
-        entries: List[Dict[str, Any]],
-        page: int,
-        total_pages: int,
-        description: Optional[str] = None,
-        color: Optional[int] = None,
-        thumbnail: Optional[str] = None,
-        **kwargs
-    ) -> discord.Embed:
-        """Create a paginated embed
+    async def help_embed(cls, 
+                        title: str, 
+                        description: str,
+                        commands: List[Dict[str, str]],
+                        footer_text: Optional[str] = None) -> discord.Embed:
+        """Create a help embed
         
         Args:
-            title: Embed title
-            entries: List of entries for current page
-            page: Current page number (1-indexed)
-            total_pages: Total number of pages
-            description: Embed description (optional)
-            color: Embed color (optional)
-            thumbnail: Thumbnail URL (optional)
-            **kwargs: Additional arguments for primary method
+            title: Help title
+            description: Help description
+            commands: List of command dictionaries with name and description
+            footer_text: Footer text (default: None)
             
         Returns:
-            discord.Embed: Created embed
+            discord.Embed: Help embed
         """
+        # Create fields for commands
+        fields = []
+        
+        for cmd in commands:
+            fields.append({
+                "name": cmd["name"],
+                "value": cmd["description"],
+                "inline": False
+            })
+        
         # Create embed
-        embed = cls.primary(
+        return await cls.create_embed(
             title=title,
             description=description,
-            color=color or cls.DEFAULT_COLOR,
-            thumbnail=thumbnail,
-            **kwargs
+            color=cls.COLORS["info"],
+            fields=fields,
+            thumbnail_url=cls.ICONS["info"],
+            footer_text=footer_text,
+            timestamp=datetime.utcnow()
         )
-        
-        # Add entries
-        if entries:
-            # Format entries as fields
-            for entry in entries:
-                name = entry.get("name", "")
-                value = entry.get("value", "")
-                inline = entry.get("inline", False)
-                
-                embed.add_field(
-                    name=name,
-                    value=value,
-                    inline=inline
-                )
-        else:
-            embed.add_field(
-                name="No entries",
-                value="There are no entries to display.",
-                inline=False
-            )
-        
-        # Add page indicator to footer
-        footer_text = kwargs.get("footer", cls.DEFAULT_FOOTER)
-        footer_icon = kwargs.get("footer_icon")
-        
-        embed.set_footer(
-            text=f"{footer_text} • Page {page}/{total_pages}",
-            icon_url=footer_icon
-        )
-        
-        return embed

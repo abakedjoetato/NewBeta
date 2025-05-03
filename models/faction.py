@@ -2,43 +2,29 @@
 Faction model for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. Faction class with database operations
-2. Faction member management
-3. Permission management
-4. Faction statistics tracking
+1. Faction class for organizing players into teams
+2. Methods for creating and retrieving factions
+3. Faction statistics calculation
 """
-import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set, Union, TypeVar, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Union, TypeVar, Set
 
 import discord
 
 from utils.database import get_db
 from utils.async_utils import AsyncCache
 
+from models.player import Player
+
 logger = logging.getLogger(__name__)
 
 # Type variables
 F = TypeVar('F', bound='Faction')
 
-# Constants for faction settings
-MAX_FACTION_NAME_LENGTH = 32
-MAX_FACTION_TAG_LENGTH = 10
-MAX_FACTION_DESC_LENGTH = 1024
-MAX_FACTION_MEMBERS = 100
-DEFAULT_FACTION_COLOR = 0x7289DA
-
-# Regex for valid faction names and tags
-VALID_FACTION_NAME_REGEX = re.compile(r'^[a-zA-Z0-9 \-_\']+$')
-VALID_FACTION_TAG_REGEX = re.compile(r'^[a-zA-Z0-9\-_]+$')
-
-# Faction roles
-FACTION_ROLES = ["member", "officer", "leader"]
-
 class Faction:
-    """Faction class for managing player factions"""
+    """Faction class for organizing players into teams"""
     
     def __init__(self, data: Dict[str, Any]):
         """Initialize a faction
@@ -49,21 +35,18 @@ class Faction:
         self.data = data
         self._id = data.get("_id")
         self.server_id = data.get("server_id")
-        self.name = data.get("name")
-        self.tag = data.get("tag")
-        self.description = data.get("description")
-        self.color = data.get("color", DEFAULT_FACTION_COLOR)
+        self.guild_id = data.get("guild_id")
+        self.faction_name = data.get("faction_name")
+        self.faction_tag = data.get("faction_tag")
+        self.description = data.get("description", "")
         self.icon_url = data.get("icon_url")
         self.banner_url = data.get("banner_url")
-        self.leader_id = data.get("leader_id")
+        self.color = data.get("color", 0x7289DA)  # Discord Blurple
+        self.owner_id = data.get("owner_id")
+        self.admin_ids = data.get("admin_ids", [])
+        self.member_ids = data.get("member_ids", [])
         self.created_at = data.get("created_at")
         self.updated_at = data.get("updated_at")
-        self.member_count = data.get("member_count", 0)
-        self.is_public = data.get("is_public", True)
-        self.require_approval = data.get("require_approval", False)
-        self.discord_role_id = data.get("discord_role_id")
-        self.discord_guild_id = data.get("discord_guild_id")
-        self.stats = data.get("stats", {})
     
     @property
     def id(self) -> str:
@@ -74,13 +57,22 @@ class Faction:
         """
         return str(self._id)
     
+    @property
+    def member_count(self) -> int:
+        """Get number of faction members
+        
+        Returns:
+            int: Number of members
+        """
+        return len(self.member_ids)
+    
     @classmethod
     @AsyncCache.cached(ttl=60)
     async def get_by_id(cls, faction_id: str) -> Optional['Faction']:
         """Get faction by ID
         
         Args:
-            faction_id: Faction ID
+            faction_id: Faction document ID
             
         Returns:
             Faction or None: Faction if found
@@ -95,12 +87,12 @@ class Faction:
     
     @classmethod
     @AsyncCache.cached(ttl=60)
-    async def get_by_name(cls, server_id: str, name: str) -> Optional['Faction']:
+    async def get_by_name(cls, server_id: str, faction_name: str) -> Optional['Faction']:
         """Get faction by name
         
         Args:
             server_id: Server ID
-            name: Faction name
+            faction_name: Faction name
             
         Returns:
             Faction or None: Faction if found
@@ -108,29 +100,22 @@ class Faction:
         db = await get_db()
         faction_data = await db.collections["factions"].find_one({
             "server_id": server_id,
-            "name": name
+            "faction_name": faction_name
         })
         
         if not faction_data:
-            # Try case-insensitive search (but not primary lookup for performance)
-            faction_data = await db.collections["factions"].find_one({
-                "server_id": server_id,
-                "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}
-            })
-            
-            if not faction_data:
-                return None
+            return None
         
         return cls(faction_data)
     
     @classmethod
     @AsyncCache.cached(ttl=60)
-    async def get_by_tag(cls, server_id: str, tag: str) -> Optional['Faction']:
+    async def get_by_tag(cls, server_id: str, faction_tag: str) -> Optional['Faction']:
         """Get faction by tag
         
         Args:
             server_id: Server ID
-            tag: Faction tag
+            faction_tag: Faction tag
             
         Returns:
             Faction or None: Faction if found
@@ -138,124 +123,76 @@ class Faction:
         db = await get_db()
         faction_data = await db.collections["factions"].find_one({
             "server_id": server_id,
-            "tag": tag
+            "faction_tag": faction_tag
         })
         
         if not faction_data:
-            # Try case-insensitive search (but not primary lookup for performance)
-            faction_data = await db.collections["factions"].find_one({
-                "server_id": server_id,
-                "tag": {"$regex": f"^{re.escape(tag)}$", "$options": "i"}
-            })
-            
-            if not faction_data:
-                return None
+            return None
         
         return cls(faction_data)
     
     @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_all(cls, server_id: str) -> List['Faction']:
-        """Get all factions on a server
-        
-        Args:
-            server_id: Server ID
-            
-        Returns:
-            List[Faction]: List of factions
-        """
-        db = await get_db()
-        cursor = db.collections["factions"].find({"server_id": server_id})
-        faction_data = await cursor.to_list(length=None)
-        
-        return [cls(data) for data in faction_data]
-    
-    @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_for_player(cls, server_id: str, player_id: str) -> List['Faction']:
-        """Get factions a player is a member of
+    async def get_for_player(cls, server_id: str, player_id: str) -> Optional['Faction']:
+        """Get faction for a player
         
         Args:
             server_id: Server ID
             player_id: Player ID
             
         Returns:
-            List[Faction]: List of factions
+            Faction or None: Faction if found
         """
         db = await get_db()
-        
-        # Find faction members for this player
-        cursor = db.collections["faction_members"].find({
-            "player_id": player_id
+        faction_data = await db.collections["factions"].find_one({
+            "server_id": server_id,
+            "member_ids": {"$in": [player_id]}
         })
-        faction_members = await cursor.to_list(length=None)
         
-        # Extract faction IDs
-        faction_ids = [member["faction_id"] for member in faction_members]
+        if not faction_data:
+            return None
         
-        if not faction_ids:
-            return []
-        
-        # Find factions by ID and server ID
-        cursor = db.collections["factions"].find({
-            "_id": {"$in": faction_ids},
-            "server_id": server_id
-        })
-        faction_data = await cursor.to_list(length=None)
-        
-        return [cls(data) for data in faction_data]
+        return cls(faction_data)
     
     @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_top_factions(cls, server_id: str, limit: int = 10) -> List['Faction']:
-        """Get top factions by member count
+    async def get_all(cls, server_id: str) -> List['Faction']:
+        """Get all factions for a server
         
         Args:
             server_id: Server ID
-            limit: Maximum number of factions to return
             
         Returns:
-            List[Faction]: List of top factions
+            List[Faction]: List of factions
         """
         db = await get_db()
-        cursor = db.collections["factions"].find({
+        factions_data = await db.collections["factions"].find({
             "server_id": server_id
-        }).sort("member_count", -1).limit(limit)
+        }).to_list(length=None)
         
-        faction_data = await cursor.to_list(length=None)
-        return [cls(data) for data in faction_data]
+        return [cls(faction_data) for faction_data in factions_data]
     
     @classmethod
     async def create(
         cls,
         server_id: str,
-        name: str,
-        tag: str,
-        leader_id: str,
-        description: Optional[str] = None,
-        color: int = DEFAULT_FACTION_COLOR,
-        icon_url: Optional[str] = None,
-        banner_url: Optional[str] = None,
-        discord_role_id: Optional[int] = None,
-        discord_guild_id: Optional[int] = None,
-        is_public: bool = True,
-        require_approval: bool = False
+        guild_id: int,
+        faction_name: str,
+        faction_tag: str,
+        owner_id: str,
+        description: str = "",
+        icon_url: str = None,
+        color: int = None
     ) -> 'Faction':
         """Create a new faction
         
         Args:
             server_id: Server ID
-            name: Faction name
-            tag: Faction tag
-            leader_id: Leader player ID
-            description: Faction description (optional)
-            color: Faction color (optional)
-            icon_url: Faction icon URL (optional)
-            banner_url: Faction banner URL (optional)
-            discord_role_id: Discord role ID (optional)
-            discord_guild_id: Discord guild ID (optional)
-            is_public: Whether faction is public (optional)
-            require_approval: Whether to require approval for joins (optional)
+            guild_id: Discord guild ID
+            faction_name: Faction name
+            faction_tag: Faction tag
+            owner_id: Owner player ID
+            description: Faction description (default: "")
+            icon_url: Faction icon URL (default: None)
+            color: Faction color (default: None)
             
         Returns:
             Faction: Created faction
@@ -263,558 +200,433 @@ class Faction:
         Raises:
             ValueError: If faction name or tag already exists
         """
-        # Validate faction name and tag
-        if not VALID_FACTION_NAME_REGEX.match(name):
-            raise ValueError("Faction name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes")
+        # Check for existing faction with same name or tag
+        existing_name = await cls.get_by_name(server_id, faction_name)
+        if existing_name:
+            raise ValueError(f"Faction with name '{faction_name}' already exists")
+            
+        existing_tag = await cls.get_by_tag(server_id, faction_tag)
+        if existing_tag:
+            raise ValueError(f"Faction with tag '{faction_tag}' already exists")
         
-        if not VALID_FACTION_TAG_REGEX.match(tag):
-            raise ValueError("Faction tag can only contain letters, numbers, hyphens, and underscores")
+        # Validate tag format
+        if not cls._validate_faction_tag(faction_tag):
+            raise ValueError(f"Invalid faction tag: {faction_tag}")
+            
+        # Use default color if none provided
+        if color is None:
+            color = 0x7289DA  # Discord Blurple
         
-        if len(name) > MAX_FACTION_NAME_LENGTH:
-            raise ValueError(f"Faction name cannot exceed {MAX_FACTION_NAME_LENGTH} characters")
-        
-        if len(tag) > MAX_FACTION_TAG_LENGTH:
-            raise ValueError(f"Faction tag cannot exceed {MAX_FACTION_TAG_LENGTH} characters")
-        
-        if description and len(description) > MAX_FACTION_DESC_LENGTH:
-            raise ValueError(f"Faction description cannot exceed {MAX_FACTION_DESC_LENGTH} characters")
-        
-        # Check if faction name or tag already exists
         db = await get_db()
-        existing_faction = await db.collections["factions"].find_one({
-            "server_id": server_id,
-            "$or": [
-                {"name": name},
-                {"tag": tag}
-            ]
-        })
-        
-        if existing_faction:
-            if existing_faction["name"] == name:
-                raise ValueError(f"Faction with name '{name}' already exists")
-            else:
-                raise ValueError(f"Faction with tag '{tag}' already exists")
-        
-        # Create faction
         now = datetime.utcnow()
+        
+        # Create faction document
         faction_data = {
             "server_id": server_id,
-            "name": name,
-            "tag": tag,
+            "guild_id": guild_id,
+            "faction_name": faction_name,
+            "faction_tag": faction_tag,
             "description": description,
-            "color": color,
             "icon_url": icon_url,
-            "banner_url": banner_url,
-            "leader_id": leader_id,
+            "banner_url": None,
+            "color": color,
+            "owner_id": owner_id,
+            "admin_ids": [owner_id],
+            "member_ids": [owner_id],
             "created_at": now,
-            "updated_at": now,
-            "member_count": 1,  # Leader is the first member
-            "is_public": is_public,
-            "require_approval": require_approval,
-            "discord_role_id": discord_role_id,
-            "discord_guild_id": discord_guild_id,
-            "stats": {
-                "kills": 0,
-                "deaths": 0,
-                "assists": 0,
-                "revives": 0
-            }
+            "updated_at": now
         }
         
         result = await db.collections["factions"].insert_one(faction_data)
         faction_data["_id"] = result.inserted_id
         
-        # Add leader as first member
-        await db.collections["faction_members"].insert_one({
-            "faction_id": result.inserted_id,
-            "player_id": leader_id,
-            "server_id": server_id,
-            "role": "leader",
-            "joined_at": now
-        })
-        
-        # Invalidate caches
-        AsyncCache.invalidate_all(cls.get_all)
-        AsyncCache.invalidate_all(cls.get_for_player)
-        AsyncCache.invalidate_all(cls.get_top_factions)
+        # Clear player faction cache
+        player = await Player.get_by_player_id(server_id, owner_id)
+        if player:
+            await player.set_faction(str(result.inserted_id))
         
         return cls(faction_data)
     
-    async def update(self, update_data: Dict[str, Any]) -> 'Faction':
+    async def update(self, **kwargs) -> bool:
         """Update faction data
         
         Args:
-            update_data: Data to update
+            **kwargs: Fields to update
             
         Returns:
-            Faction: Updated faction
+            bool: True if successful
         """
-        # Validate updates
-        if "name" in update_data:
-            name = update_data["name"]
-            if not VALID_FACTION_NAME_REGEX.match(name):
-                raise ValueError("Faction name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes")
-            
-            if len(name) > MAX_FACTION_NAME_LENGTH:
-                raise ValueError(f"Faction name cannot exceed {MAX_FACTION_NAME_LENGTH} characters")
-            
-            # Check if name already exists
-            db = await get_db()
-            existing_faction = await db.collections["factions"].find_one({
-                "server_id": self.server_id,
-                "name": name,
-                "_id": {"$ne": self._id}
-            })
-            
-            if existing_faction:
-                raise ValueError(f"Faction with name '{name}' already exists")
-        
-        if "tag" in update_data:
-            tag = update_data["tag"]
-            if not VALID_FACTION_TAG_REGEX.match(tag):
-                raise ValueError("Faction tag can only contain letters, numbers, hyphens, and underscores")
-            
-            if len(tag) > MAX_FACTION_TAG_LENGTH:
-                raise ValueError(f"Faction tag cannot exceed {MAX_FACTION_TAG_LENGTH} characters")
-            
-            # Check if tag already exists
-            db = await get_db()
-            existing_faction = await db.collections["factions"].find_one({
-                "server_id": self.server_id,
-                "tag": tag,
-                "_id": {"$ne": self._id}
-            })
-            
-            if existing_faction:
-                raise ValueError(f"Faction with tag '{tag}' already exists")
-        
-        if "description" in update_data and update_data["description"]:
-            if len(update_data["description"]) > MAX_FACTION_DESC_LENGTH:
-                raise ValueError(f"Faction description cannot exceed {MAX_FACTION_DESC_LENGTH} characters")
-        
-        # Update faction in database
         db = await get_db()
-        update_data["updated_at"] = datetime.utcnow()
+        now = datetime.utcnow()
         
-        result = await db.collections["factions"].find_one_and_update(
+        # Extract updateable fields
+        update_fields = {}
+        if "faction_name" in kwargs:
+            # Check for existing faction with same name
+            existing = await self.__class__.get_by_name(self.server_id, kwargs["faction_name"])
+            if existing and existing.id != self.id:
+                raise ValueError(f"Faction with name '{kwargs['faction_name']}' already exists")
+            update_fields["faction_name"] = kwargs["faction_name"]
+            
+        if "faction_tag" in kwargs:
+            # Check for existing faction with same tag
+            existing = await self.__class__.get_by_tag(self.server_id, kwargs["faction_tag"])
+            if existing and existing.id != self.id:
+                raise ValueError(f"Faction with tag '{kwargs['faction_tag']}' already exists")
+                
+            # Validate tag format
+            if not self._validate_faction_tag(kwargs["faction_tag"]):
+                raise ValueError(f"Invalid faction tag: {kwargs['faction_tag']}")
+                
+            update_fields["faction_tag"] = kwargs["faction_tag"]
+            
+        if "description" in kwargs:
+            update_fields["description"] = kwargs["description"]
+            
+        if "icon_url" in kwargs:
+            update_fields["icon_url"] = kwargs["icon_url"]
+            
+        if "banner_url" in kwargs:
+            update_fields["banner_url"] = kwargs["banner_url"]
+            
+        if "color" in kwargs:
+            update_fields["color"] = kwargs["color"]
+            
+        if "owner_id" in kwargs:
+            update_fields["owner_id"] = kwargs["owner_id"]
+            # Add to admin_ids and member_ids if not already there
+            if kwargs["owner_id"] not in self.admin_ids:
+                self.admin_ids.append(kwargs["owner_id"])
+                update_fields["admin_ids"] = self.admin_ids
+            if kwargs["owner_id"] not in self.member_ids:
+                self.member_ids.append(kwargs["owner_id"])
+                update_fields["member_ids"] = self.member_ids
+        
+        if not update_fields:
+            return False
+            
+        # Add update timestamp
+        update_fields["updated_at"] = now
+        
+        # Update database
+        result = await db.collections["factions"].update_one(
             {"_id": self._id},
-            {"$set": update_data},
-            return_document=True
+            {"$set": update_fields}
         )
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        if "name" in update_data:
-            AsyncCache.invalidate(self.__class__.get_by_name, self.server_id, self.name)
-            AsyncCache.invalidate(self.__class__.get_by_name, self.server_id, update_data["name"])
-        if "tag" in update_data:
-            AsyncCache.invalidate(self.__class__.get_by_tag, self.server_id, self.tag)
-            AsyncCache.invalidate(self.__class__.get_by_tag, self.server_id, update_data["tag"])
-        AsyncCache.invalidate_all(self.__class__.get_all)
-        AsyncCache.invalidate_all(self.__class__.get_for_player)
-        AsyncCache.invalidate_all(self.__class__.get_top_factions)
-        
-        # Update local state
-        self.data = result
-        for key, value in update_data.items():
+        # Update local data
+        for key, value in update_fields.items():
             setattr(self, key, value)
         
-        return self
-    
-    async def delete(self) -> bool:
-        """Delete faction
-        
-        Returns:
-            bool: True if successfully deleted
-        """
-        db = await get_db()
-        
-        # Delete faction members
-        await db.collections["faction_members"].delete_many({
-            "faction_id": self._id
-        })
-        
-        # Delete faction
-        result = await db.collections["factions"].delete_one({
-            "_id": self._id
-        })
-        
-        # Invalidate caches
+        # Clear cache
         AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_name, self.server_id, self.name)
-        AsyncCache.invalidate(self.__class__.get_by_tag, self.server_id, self.tag)
-        AsyncCache.invalidate_all(self.__class__.get_all)
-        AsyncCache.invalidate_all(self.__class__.get_for_player)
-        AsyncCache.invalidate_all(self.__class__.get_top_factions)
-        
-        return result.deleted_count > 0
-    
-    @AsyncCache.cached(ttl=60)
-    async def get_members(self) -> List[Dict[str, Any]]:
-        """Get faction members
-        
-        Returns:
-            List[Dict]: List of faction member data
-        """
-        db = await get_db()
-        
-        # Get faction members
-        cursor = db.collections["faction_members"].find({
-            "faction_id": self._id
-        })
-        faction_members = await cursor.to_list(length=None)
-        
-        # Get player details for members
-        members = []
-        for member in faction_members:
-            player_id = member["player_id"]
-            player = await db.collections["players"].find_one({"_id": player_id})
-            
-            if player:
-                members.append({
-                    "player_id": player_id,
-                    "player_name": player.get("name", "Unknown"),
-                    "server_id": member["server_id"],
-                    "role": member["role"],
-                    "joined_at": member["joined_at"]
-                })
-        
-        return members
-    
-    async def add_member(
-        self,
-        player_id: str,
-        role: str = "member"
-    ) -> bool:
-        """Add member to faction
-        
-        Args:
-            player_id: Player ID
-            role: Member role (default: member)
-            
-        Returns:
-            bool: True if successfully added
-            
-        Raises:
-            ValueError: If faction is full or player is already in faction
-        """
-        # Check if faction is full
-        if self.member_count >= MAX_FACTION_MEMBERS:
-            raise ValueError(f"Faction is full (maximum {MAX_FACTION_MEMBERS} members)")
-        
-        # Validate role
-        if role not in FACTION_ROLES:
-            raise ValueError(f"Invalid role '{role}'. Must be one of: {', '.join(FACTION_ROLES)}")
-        
-        db = await get_db()
-        
-        # Check if player is already in a faction on this server
-        player_factions = await self.__class__.get_for_player(self.server_id, player_id)
-        if player_factions:
-            # Check if player is already in this faction
-            if any(f.id == self.id for f in player_factions):
-                raise ValueError("Player is already a member of this faction")
-            
-            # Check if player is in another faction
-            raise ValueError("Player is already a member of another faction")
-        
-        # Add member
-        now = datetime.utcnow()
-        result = await db.collections["faction_members"].insert_one({
-            "faction_id": self._id,
-            "player_id": player_id,
-            "server_id": self.server_id,
-            "role": role,
-            "joined_at": now
-        })
-        
-        # Update member count
-        await db.collections["factions"].update_one(
-            {"_id": self._id},
-            {
-                "$inc": {"member_count": 1},
-                "$set": {"updated_at": now}
-            }
-        )
-        
-        # Update local state
-        self.member_count += 1
-        self.updated_at = now
-        
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate_all(self.__class__.get_for_player)
-        AsyncCache.invalidate(self.get_members)
+        if "faction_name" in update_fields:
+            AsyncCache.invalidate(self.__class__.get_by_name, self.server_id, self.faction_name)
+        if "faction_tag" in update_fields:
+            AsyncCache.invalidate(self.__class__.get_by_tag, self.server_id, self.faction_tag)
         
         return result.acknowledged
     
-    async def remove_member(self, player_id: str) -> bool:
-        """Remove member from faction
+    async def add_member(self, player_id: str) -> bool:
+        """Add a member to the faction
         
         Args:
             player_id: Player ID
             
         Returns:
-            bool: True if successfully removed
-            
-        Raises:
-            ValueError: If player is the leader or not in faction
+            bool: True if successful
         """
-        # Check if player is the leader
-        if player_id == self.leader_id:
-            raise ValueError("Cannot remove faction leader. Transfer leadership first.")
-        
+        if player_id in self.member_ids:
+            return True  # Already a member
+            
         db = await get_db()
-        
-        # Check if player is in faction
-        member = await db.collections["faction_members"].find_one({
-            "faction_id": self._id,
-            "player_id": player_id
-        })
-        
-        if not member:
-            raise ValueError("Player is not a member of this faction")
-        
-        # Remove member
-        result = await db.collections["faction_members"].delete_one({
-            "faction_id": self._id,
-            "player_id": player_id
-        })
-        
-        if result.deleted_count > 0:
-            # Update member count
-            now = datetime.utcnow()
-            await db.collections["factions"].update_one(
-                {"_id": self._id},
-                {
-                    "$inc": {"member_count": -1},
-                    "$set": {"updated_at": now}
-                }
-            )
-            
-            # Update local state
-            self.member_count = max(0, self.member_count - 1)
-            self.updated_at = now
-            
-            # Invalidate caches
-            AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-            AsyncCache.invalidate_all(self.__class__.get_for_player)
-            AsyncCache.invalidate(self.get_members)
-            
-            return True
-        
-        return False
-    
-    async def update_member_role(self, player_id: str, new_role: str) -> bool:
-        """Update member role
-        
-        Args:
-            player_id: Player ID
-            new_role: New role
-            
-        Returns:
-            bool: True if successfully updated
-            
-        Raises:
-            ValueError: If player is not in faction or role is invalid
-        """
-        # Validate role
-        if new_role not in FACTION_ROLES:
-            raise ValueError(f"Invalid role '{new_role}'. Must be one of: {', '.join(FACTION_ROLES)}")
-        
-        # Handle leader role specially
-        if new_role == "leader":
-            return await self.transfer_leadership(player_id)
-        
-        db = await get_db()
-        
-        # Check if player is in faction
-        member = await db.collections["faction_members"].find_one({
-            "faction_id": self._id,
-            "player_id": player_id
-        })
-        
-        if not member:
-            raise ValueError("Player is not a member of this faction")
-        
-        # Don't allow changing leader's role this way
-        if member["player_id"] == self.leader_id:
-            raise ValueError("Cannot change leader's role. Transfer leadership first.")
-        
-        # Update role
-        result = await db.collections["faction_members"].update_one(
-            {
-                "faction_id": self._id,
-                "player_id": player_id
-            },
-            {
-                "$set": {
-                    "role": new_role
-                }
-            }
-        )
-        
-        # Invalidate caches
-        AsyncCache.invalidate(self.get_members)
-        
-        return result.modified_count > 0
-    
-    async def transfer_leadership(self, new_leader_id: str) -> bool:
-        """Transfer faction leadership
-        
-        Args:
-            new_leader_id: New leader player ID
-            
-        Returns:
-            bool: True if successfully transferred
-            
-        Raises:
-            ValueError: If new leader is not in faction
-        """
-        db = await get_db()
-        
-        # Check if new leader is in faction
-        new_leader_member = await db.collections["faction_members"].find_one({
-            "faction_id": self._id,
-            "player_id": new_leader_id
-        })
-        
-        if not new_leader_member:
-            raise ValueError("New leader is not a member of this faction")
-        
-        # Get current leader
-        old_leader_id = self.leader_id
-        
-        # Update faction leader
         now = datetime.utcnow()
-        faction_result = await db.collections["factions"].update_one(
+        
+        # Check if player is in another faction
+        current_faction = await self.__class__.get_for_player(self.server_id, player_id)
+        if current_faction and current_faction.id != self.id:
+            # Remove from other faction
+            await current_faction.remove_member(player_id)
+        
+        # Add to this faction
+        self.member_ids.append(player_id)
+        
+        # Update database
+        result = await db.collections["factions"].update_one(
             {"_id": self._id},
             {
                 "$set": {
-                    "leader_id": new_leader_id,
+                    "member_ids": self.member_ids,
                     "updated_at": now
                 }
             }
         )
         
-        # Update member roles
-        await db.collections["faction_members"].update_one(
-            {
-                "faction_id": self._id,
-                "player_id": new_leader_id
-            },
-            {
-                "$set": {"role": "leader"}
-            }
-        )
+        # Update player faction
+        player = await Player.get_by_player_id(self.server_id, player_id)
+        if player:
+            await player.set_faction(self.id)
         
-        await db.collections["faction_members"].update_one(
-            {
-                "faction_id": self._id,
-                "player_id": old_leader_id
-            },
-            {
-                "$set": {"role": "officer"}
-            }
-        )
-        
-        # Update local state
-        self.leader_id = new_leader_id
+        # Update local data
         self.updated_at = now
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.get_members)
-        
-        return faction_result.modified_count > 0
+        return result.acknowledged
     
-    async def update_stats(self, stats_update: Dict[str, int]) -> bool:
-        """Update faction statistics
+    async def remove_member(self, player_id: str) -> bool:
+        """Remove a member from the faction
         
         Args:
-            stats_update: Statistics to update
+            player_id: Player ID
             
         Returns:
-            bool: True if successfully updated
+            bool: True if successful
         """
+        if player_id not in self.member_ids:
+            return True  # Not a member
+            
         db = await get_db()
-        
-        # Create update operation
-        update_op = {}
-        for stat, value in stats_update.items():
-            if value != 0:  # Only update non-zero values
-                update_op[f"stats.{stat}"] = value
-        
-        if not update_op:
-            return True  # No updates needed
-        
-        # Update stats
         now = datetime.utcnow()
+        
+        # Remove from member IDs
+        self.member_ids.remove(player_id)
+        
+        # Remove from admin IDs if present
+        if player_id in self.admin_ids:
+            self.admin_ids.remove(player_id)
+            
+        # If removing owner, make someone else owner if possible
+        if player_id == self.owner_id and self.member_ids:
+            new_owner_id = self.member_ids[0]
+            
+            # Update database
+            result = await db.collections["factions"].update_one(
+                {"_id": self._id},
+                {
+                    "$set": {
+                        "member_ids": self.member_ids,
+                        "admin_ids": self.admin_ids,
+                        "owner_id": new_owner_id,
+                        "updated_at": now
+                    }
+                }
+            )
+            
+            # Update local data
+            self.owner_id = new_owner_id
+        else:
+            # Update database
+            result = await db.collections["factions"].update_one(
+                {"_id": self._id},
+                {
+                    "$set": {
+                        "member_ids": self.member_ids,
+                        "admin_ids": self.admin_ids,
+                        "updated_at": now
+                    }
+                }
+            )
+        
+        # Update player faction
+        player = await Player.get_by_player_id(self.server_id, player_id)
+        if player:
+            await player.set_faction(None)
+        
+        # Update local data
+        self.updated_at = now
+        
+        return result.acknowledged
+    
+    async def add_admin(self, player_id: str) -> bool:
+        """Add an admin to the faction
+        
+        Args:
+            player_id: Player ID
+            
+        Returns:
+            bool: True if successful
+        """
+        if player_id not in self.member_ids:
+            return False  # Not a member
+            
+        if player_id in self.admin_ids:
+            return True  # Already an admin
+            
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Add to admin IDs
+        self.admin_ids.append(player_id)
+        
+        # Update database
         result = await db.collections["factions"].update_one(
             {"_id": self._id},
             {
-                "$inc": update_op,
-                "$set": {"updated_at": now}
+                "$set": {
+                    "admin_ids": self.admin_ids,
+                    "updated_at": now
+                }
             }
         )
         
-        # Update local state
-        for stat, value in stats_update.items():
-            if stat in self.stats:
-                self.stats[stat] += value
-            else:
-                self.stats[stat] = value
-        
+        # Update local data
         self.updated_at = now
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        
-        return result.modified_count > 0
+        return result.acknowledged
     
-    def get_discord_embed(self, guild: Optional[discord.Guild] = None) -> discord.Embed:
-        """Get Discord embed for faction
+    async def remove_admin(self, player_id: str) -> bool:
+        """Remove an admin from the faction
         
         Args:
-            guild: Discord guild (optional)
+            player_id: Player ID
             
         Returns:
-            discord.Embed: Faction embed
+            bool: True if successful
         """
-        embed = discord.Embed(
-            title=f"{self.name} [{self.tag}]",
-            description=self.description,
-            color=self.color
+        if player_id not in self.admin_ids:
+            return True  # Not an admin
+            
+        if player_id == self.owner_id:
+            return False  # Can't remove owner from admin
+            
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Remove from admin IDs
+        self.admin_ids.remove(player_id)
+        
+        # Update database
+        result = await db.collections["factions"].update_one(
+            {"_id": self._id},
+            {
+                "$set": {
+                    "admin_ids": self.admin_ids,
+                    "updated_at": now
+                }
+            }
         )
         
-        # Set thumbnail if available
-        if self.icon_url:
-            embed.set_thumbnail(url=self.icon_url)
+        # Update local data
+        self.updated_at = now
         
-        # Add member count
-        embed.add_field(name="Members", value=str(self.member_count), inline=True)
+        return result.acknowledged
+    
+    async def delete(self) -> bool:
+        """Delete the faction
         
-        # Add stats
-        kills = self.stats.get("kills", 0)
-        deaths = self.stats.get("deaths", 0)
-        kd_ratio = kills / max(deaths, 1)
+        Returns:
+            bool: True if successful
+        """
+        db = await get_db()
         
-        embed.add_field(name="Kills", value=str(kills), inline=True)
-        embed.add_field(name="Deaths", value=str(deaths), inline=True)
-        embed.add_field(name="K/D Ratio", value=f"{kd_ratio:.2f}", inline=True)
+        # Remove faction ID from all members
+        for player_id in self.member_ids:
+            player = await Player.get_by_player_id(self.server_id, player_id)
+            if player:
+                await player.set_faction(None)
         
-        # Add secondary stats if available
-        if "assists" in self.stats and self.stats["assists"] > 0:
-            embed.add_field(name="Assists", value=str(self.stats["assists"]), inline=True)
-        if "revives" in self.stats and self.stats["revives"] > 0:
-            embed.add_field(name="Revives", value=str(self.stats["revives"]), inline=True)
+        # Delete faction
+        result = await db.collections["factions"].delete_one({"_id": self._id})
         
-        # Add creation date
-        if self.created_at:
-            embed.set_footer(text=f"Created")
-            embed.timestamp = self.created_at
+        # Clear cache
+        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
+        AsyncCache.invalidate(self.__class__.get_by_name, self.server_id, self.faction_name)
+        AsyncCache.invalidate(self.__class__.get_by_tag, self.server_id, self.faction_tag)
         
-        return embed
+        return result.deleted_count > 0
+    
+    async def get_members(self) -> List[Player]:
+        """Get faction members
+        
+        Returns:
+            List[Player]: List of faction members
+        """
+        players = []
+        for player_id in self.member_ids:
+            player = await Player.get_by_player_id(self.server_id, player_id)
+            if player:
+                players.append(player)
+        return players
+    
+    async def get_admins(self) -> List[Player]:
+        """Get faction admins
+        
+        Returns:
+            List[Player]: List of faction admins
+        """
+        players = []
+        for player_id in self.admin_ids:
+            player = await Player.get_by_player_id(self.server_id, player_id)
+            if player:
+                players.append(player)
+        return players
+    
+    async def get_owner(self) -> Optional[Player]:
+        """Get faction owner
+        
+        Returns:
+            Player or None: Faction owner
+        """
+        return await Player.get_by_player_id(self.server_id, self.owner_id)
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get faction statistics
+        
+        Returns:
+            Dict: Faction statistics
+        """
+        # Get faction members
+        members = await self.get_members()
+        
+        # Aggregate stats
+        total_kills = sum(member.kills for member in members)
+        total_deaths = sum(member.deaths for member in members)
+        
+        # Calculate K/D ratio
+        faction_kd = total_kills / total_deaths if total_deaths > 0 else total_kills
+        
+        # Get top members
+        top_members = sorted(members, key=lambda m: m.kills, reverse=True)[:5]
+        top_members_data = [
+            {
+                "id": member.player_id,
+                "name": member.player_name,
+                "kills": member.kills,
+                "deaths": member.deaths,
+                "kd_ratio": member.kd_ratio
+            }
+            for member in top_members
+        ]
+        
+        # Weapons breakdown
+        weapons = {}
+        for member in members:
+            for weapon, count in member.weapons.items():
+                weapons[weapon] = weapons.get(weapon, 0) + count
+                
+        top_weapons = sorted(weapons.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        # Return stats
+        return {
+            "total_kills": total_kills,
+            "total_deaths": total_deaths,
+            "faction_kd": faction_kd,
+            "member_count": len(members),
+            "top_members": top_members_data,
+            "top_weapons": [{"name": w, "count": c} for w, c in top_weapons]
+        }
+    
+    @staticmethod
+    def _validate_faction_tag(tag: str) -> bool:
+        """Validate faction tag format
+        
+        Args:
+            tag: Faction tag
+            
+        Returns:
+            bool: True if valid
+        """
+        # 2-5 characters, alphanumeric
+        return bool(re.match(r'^[A-Z0-9]{2,5}$', tag))
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert faction to dictionary
@@ -825,19 +637,16 @@ class Faction:
         return {
             "id": self.id,
             "server_id": self.server_id,
-            "name": self.name,
-            "tag": self.tag,
+            "guild_id": self.guild_id,
+            "faction_name": self.faction_name,
+            "faction_tag": self.faction_tag,
             "description": self.description,
-            "color": self.color,
             "icon_url": self.icon_url,
             "banner_url": self.banner_url,
-            "leader_id": self.leader_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "color": self.color,
+            "owner_id": self.owner_id,
+            "admin_ids": self.admin_ids,
             "member_count": self.member_count,
-            "is_public": self.is_public,
-            "require_approval": self.require_approval,
-            "discord_role_id": self.discord_role_id,
-            "discord_guild_id": self.discord_guild_id,
-            "stats": self.stats
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

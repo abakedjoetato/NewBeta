@@ -2,27 +2,32 @@
 Player Link model for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. PlayerLink class for linking Discord users to in-game players
-2. Methods for creating, retrieving, and managing player links
-3. Verification token system for confirming player ownership
+1. PlayerLink class for connecting game IDs with Discord users
+2. Methods for creating and retrieving player links
+3. Link verification and management
 """
-import asyncio
 import logging
-import random
+import secrets
 import string
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set, Union, TypeVar
+from typing import Dict, List, Optional, Any, Union, TypeVar
 
 from utils.database import get_db
 from utils.async_utils import AsyncCache
+
+from models.player import Player
 
 logger = logging.getLogger(__name__)
 
 # Type variables
 PL = TypeVar('PL', bound='PlayerLink')
 
+# Constants
+VERIFICATION_CODE_LENGTH = 8
+VERIFICATION_EXPIRY_HOURS = 24
+
 class PlayerLink:
-    """Player Link class for linking Discord users to in-game players"""
+    """PlayerLink class for connecting game IDs with Discord users"""
     
     def __init__(self, data: Dict[str, Any]):
         """Initialize a player link
@@ -32,9 +37,15 @@ class PlayerLink:
         """
         self.data = data
         self._id = data.get("_id")
+        self.server_id = data.get("server_id")
+        self.player_id = data.get("player_id")
+        self.player_name = data.get("player_name")
         self.discord_id = data.get("discord_id")
-        self.players = data.get("players", [])
-        self.pending_verifications = data.get("pending_verifications", [])
+        self.discord_name = data.get("discord_name")
+        self.verification_code = data.get("verification_code")
+        self.verification_expiry = data.get("verification_expiry")
+        self.is_verified = data.get("is_verified", False)
+        self.verified_at = data.get("verified_at")
         self.created_at = data.get("created_at")
         self.updated_at = data.get("updated_at")
     
@@ -47,71 +58,41 @@ class PlayerLink:
         """
         return str(self._id)
     
-    def get_player_id_for_server(self, server_id: str) -> Optional[str]:
-        """Get player ID for a server
+    @property
+    def is_expired(self) -> bool:
+        """Check if verification code is expired
         
-        Args:
-            server_id: Server ID
+        Returns:
+            bool: True if expired
+        """
+        if not self.verification_code or not self.verification_expiry:
+            return True
             
-        Returns:
-            str or None: Player ID if found
-        """
-        for player in self.players:
-            if player.get("server_id") == server_id:
-                return player.get("player_id")
-        
-        return None
-    
-    def get_all_linked_players(self) -> List[Dict[str, Any]]:
-        """Get all linked players
-        
-        Returns:
-            List[Dict]: List of linked players
-        """
-        return self.players
+        return datetime.utcnow() > self.verification_expiry
     
     @classmethod
     @AsyncCache.cached(ttl=60)
-    async def get_by_id(cls, player_link_id: str) -> Optional['PlayerLink']:
+    async def get_by_id(cls, link_id: str) -> Optional['PlayerLink']:
         """Get player link by ID
         
         Args:
-            player_link_id: Player link ID
+            link_id: Player link document ID
             
         Returns:
             PlayerLink or None: Player link if found
         """
         db = await get_db()
-        player_link_data = await db.collections["player_links"].find_one({"_id": player_link_id})
+        link_data = await db.collections["player_links"].find_one({"_id": link_id})
         
-        if not player_link_data:
+        if not link_data:
             return None
         
-        return cls(player_link_data)
+        return cls(link_data)
     
     @classmethod
     @AsyncCache.cached(ttl=60)
-    async def get_by_discord_id(cls, discord_id: int) -> Optional['PlayerLink']:
-        """Get player link by Discord ID
-        
-        Args:
-            discord_id: Discord user ID
-            
-        Returns:
-            PlayerLink or None: Player link if found
-        """
-        db = await get_db()
-        player_link_data = await db.collections["player_links"].find_one({"discord_id": discord_id})
-        
-        if not player_link_data:
-            return None
-        
-        return cls(player_link_data)
-    
-    @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_by_player_id(cls, server_id: str, player_id: str) -> Optional['PlayerLink']:
-        """Get player link by server ID and player ID
+    async def get_by_player(cls, server_id: str, player_id: str) -> Optional['PlayerLink']:
+        """Get player link by player ID
         
         Args:
             server_id: Server ID
@@ -121,341 +102,408 @@ class PlayerLink:
             PlayerLink or None: Player link if found
         """
         db = await get_db()
-        player_link_data = await db.collections["player_links"].find_one({
-            "players": {
-                "$elemMatch": {
-                    "server_id": server_id,
-                    "player_id": player_id
-                }
-            }
+        link_data = await db.collections["player_links"].find_one({
+            "server_id": server_id,
+            "player_id": player_id
         })
         
-        if not player_link_data:
+        if not link_data:
             return None
         
-        return cls(player_link_data)
+        return cls(link_data)
     
     @classmethod
-    async def create(cls, discord_id: int) -> 'PlayerLink':
+    @AsyncCache.cached(ttl=60)
+    async def get_by_discord(cls, server_id: str, discord_id: int) -> Optional['PlayerLink']:
+        """Get player link by Discord user ID
+        
+        Args:
+            server_id: Server ID
+            discord_id: Discord user ID
+            
+        Returns:
+            PlayerLink or None: Player link if found
+        """
+        db = await get_db()
+        link_data = await db.collections["player_links"].find_one({
+            "server_id": server_id,
+            "discord_id": discord_id
+        })
+        
+        if not link_data:
+            return None
+        
+        return cls(link_data)
+    
+    @classmethod
+    @AsyncCache.cached(ttl=60)
+    async def get_by_verification_code(cls, verification_code: str) -> Optional['PlayerLink']:
+        """Get player link by verification code
+        
+        Args:
+            verification_code: Verification code
+            
+        Returns:
+            PlayerLink or None: Player link if found
+        """
+        db = await get_db()
+        link_data = await db.collections["player_links"].find_one({
+            "verification_code": verification_code,
+            "is_verified": False,
+            "verification_expiry": {"$gt": datetime.utcnow()}
+        })
+        
+        if not link_data:
+            return None
+        
+        return cls(link_data)
+    
+    @classmethod
+    async def get_all_for_server(cls, server_id: str, verified_only: bool = False) -> List['PlayerLink']:
+        """Get all player links for a server
+        
+        Args:
+            server_id: Server ID
+            verified_only: Only return verified links (default: False)
+            
+        Returns:
+            List[PlayerLink]: List of player links
+        """
+        db = await get_db()
+        
+        query = {"server_id": server_id}
+        if verified_only:
+            query["is_verified"] = True
+            
+        links_data = await db.collections["player_links"].find(query).to_list(length=None)
+        
+        return [cls(link_data) for link_data in links_data]
+    
+    @classmethod
+    async def create_link(
+        cls,
+        server_id: str,
+        player_id: str,
+        player_name: str,
+        discord_id: int,
+        discord_name: str
+    ) -> 'PlayerLink':
         """Create a new player link
         
         Args:
+            server_id: Server ID
+            player_id: Player ID
+            player_name: Player name
             discord_id: Discord user ID
+            discord_name: Discord username
             
         Returns:
             PlayerLink: Created player link
             
         Raises:
-            ValueError: If player link already exists for this Discord ID
+            ValueError: If player or Discord user already has a link
         """
-        # Check if player link already exists
-        existing_link = await cls.get_by_discord_id(discord_id)
-        if existing_link:
-            return existing_link
+        # Check for existing links
+        existing_player = await cls.get_by_player(server_id, player_id)
+        if existing_player and existing_player.is_verified:
+            raise ValueError(f"Player {player_name} is already linked to Discord user {existing_player.discord_name}")
+            
+        existing_discord = await cls.get_by_discord(server_id, discord_id)
+        if existing_discord and existing_discord.is_verified:
+            raise ValueError(f"Discord user {discord_name} is already linked to player {existing_discord.player_name}")
+            
+        # Generate verification code
+        verification_code = cls._generate_verification_code()
+        verification_expiry = datetime.utcnow() + timedelta(hours=VERIFICATION_EXPIRY_HOURS)
         
-        now = datetime.utcnow()
         db = await get_db()
+        now = datetime.utcnow()
         
-        # Create player link
-        player_link_data = {
+        # Create player link document
+        link_data = {
+            "server_id": server_id,
+            "player_id": player_id,
+            "player_name": player_name,
             "discord_id": discord_id,
-            "players": [],
-            "pending_verifications": [],
+            "discord_name": discord_name,
+            "verification_code": verification_code,
+            "verification_expiry": verification_expiry,
+            "is_verified": False,
+            "verified_at": None,
             "created_at": now,
             "updated_at": now
         }
         
-        result = await db.collections["player_links"].insert_one(player_link_data)
-        player_link_data["_id"] = result.inserted_id
+        # If player already has a link, update it
+        if existing_player:
+            result = await db.collections["player_links"].update_one(
+                {"_id": existing_player._id},
+                {"$set": link_data}
+            )
+            link_data["_id"] = existing_player._id
+            
+            # Clear cache
+            AsyncCache.invalidate(cls.get_by_id, existing_player.id)
+            AsyncCache.invalidate(cls.get_by_player, server_id, player_id)
+            if existing_player.discord_id:
+                AsyncCache.invalidate(cls.get_by_discord, server_id, existing_player.discord_id)
+            if existing_player.verification_code:
+                AsyncCache.invalidate(cls.get_by_verification_code, existing_player.verification_code)
         
-        # Invalidate caches
-        AsyncCache.invalidate_all(cls.get_by_discord_id)
+        # If Discord user already has a link, update it
+        elif existing_discord:
+            result = await db.collections["player_links"].update_one(
+                {"_id": existing_discord._id},
+                {"$set": link_data}
+            )
+            link_data["_id"] = existing_discord._id
+            
+            # Clear cache
+            AsyncCache.invalidate(cls.get_by_id, existing_discord.id)
+            if existing_discord.player_id:
+                AsyncCache.invalidate(cls.get_by_player, server_id, existing_discord.player_id)
+            AsyncCache.invalidate(cls.get_by_discord, server_id, discord_id)
+            if existing_discord.verification_code:
+                AsyncCache.invalidate(cls.get_by_verification_code, existing_discord.verification_code)
         
-        return cls(player_link_data)
+        # Otherwise create a new link
+        else:
+            result = await db.collections["player_links"].insert_one(link_data)
+            link_data["_id"] = result.inserted_id
+        
+        return cls(link_data)
     
-    async def add_player(self, server_id: str, player_id: str) -> bool:
-        """Add a player to the link
+    async def verify(self, verification_code: str) -> bool:
+        """Verify the player link
         
         Args:
-            server_id: Server ID
-            player_id: Player ID
+            verification_code: Verification code
             
         Returns:
-            bool: True if successfully added
+            bool: True if verification successful
             
         Raises:
-            ValueError: If player is already linked to another Discord user
+            ValueError: If verification fails
         """
-        # Check if player is already linked to someone else
-        existing_link = await self.__class__.get_by_player_id(server_id, player_id)
-        if existing_link and existing_link.discord_id != self.discord_id:
-            raise ValueError(f"Player is already linked to Discord user ID {existing_link.discord_id}")
-        
-        # Check if player is already in this link
-        for player in self.players:
-            if player.get("server_id") == server_id and player.get("player_id") == player_id:
-                # Already linked
-                return True
-        
-        # Add player to link
-        now = datetime.utcnow()
-        db = await get_db()
-        
-        # Check if server already has a linked player
-        for i, player in enumerate(self.players):
-            if player.get("server_id") == server_id:
-                # Replace existing link for this server
-                self.players[i] = {
-                    "server_id": server_id,
-                    "player_id": player_id,
-                    "linked_at": now
-                }
-                
-                result = await db.collections["player_links"].update_one(
-                    {"_id": self._id},
-                    {
-                        "$set": {
-                            f"players.{i}": {
-                                "server_id": server_id,
-                                "player_id": player_id,
-                                "linked_at": now
-                            },
-                            "updated_at": now
-                        }
-                    }
-                )
-                
-                # Invalidate caches
-                AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-                AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
-                AsyncCache.invalidate(self.__class__.get_by_player_id, server_id, player_id)
-                
-                return True
-        
-        # Add new link
-        self.players.append({
-            "server_id": server_id,
-            "player_id": player_id,
-            "linked_at": now
-        })
-        
-        result = await db.collections["player_links"].update_one(
-            {"_id": self._id},
-            {
-                "$push": {
-                    "players": {
-                        "server_id": server_id,
-                        "player_id": player_id,
-                        "linked_at": now
-                    }
-                },
-                "$set": {
-                    "updated_at": now
-                }
-            }
-        )
-        
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
-        AsyncCache.invalidate(self.__class__.get_by_player_id, server_id, player_id)
-        
-        return True
-    
-    async def remove_player(self, server_id: str) -> bool:
-        """Remove a player from the link
-        
-        Args:
-            server_id: Server ID
+        # Check if already verified
+        if self.is_verified:
+            return True
             
-        Returns:
-            bool: True if successfully removed
-        """
-        # Check if player is in this link
-        player_found = False
-        for player in self.players:
-            if player.get("server_id") == server_id:
-                player_found = True
-                break
-        
-        if not player_found:
-            return False
-        
-        # Remove player from link
-        now = datetime.utcnow()
-        db = await get_db()
-        
-        self.players = [p for p in self.players if p.get("server_id") != server_id]
-        
-        result = await db.collections["player_links"].update_one(
-            {"_id": self._id},
-            {
-                "$pull": {
-                    "players": {
-                        "server_id": server_id
-                    }
-                },
-                "$set": {
-                    "updated_at": now
-                }
-            }
-        )
-        
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
-        AsyncCache.invalidate_all(self.__class__.get_by_player_id)
-        
-        return True
-    
-    async def create_verification_token(self, server_id: str, player_id: str) -> str:
-        """Create a verification token for a player
-        
-        Args:
-            server_id: Server ID
-            player_id: Player ID
+        # Check if verification code matches
+        if self.verification_code != verification_code:
+            raise ValueError("Invalid verification code")
             
-        Returns:
-            str: Verification token
-        """
-        # Generate random token
-        token = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        
-        # Set expiration time (1 hour from now)
-        expiration = datetime.utcnow() + timedelta(hours=1)
-        
-        # Add to pending verifications
-        now = datetime.utcnow()
+        # Check if verification code is expired
+        if self.is_expired:
+            raise ValueError("Verification code has expired")
+            
         db = await get_db()
+        now = datetime.utcnow()
         
-        # Remove any existing verification for this server
-        for i, verification in enumerate(self.pending_verifications):
-            if verification.get("server_id") == server_id:
-                del self.pending_verifications[i]
-                break
-        
-        # Add new verification
-        verification_data = {
-            "token": token,
-            "server_id": server_id,
-            "player_id": player_id,
-            "created_at": now,
-            "expires_at": expiration
+        # Update player link
+        update_data = {
+            "is_verified": True,
+            "verified_at": now,
+            "updated_at": now
         }
         
-        self.pending_verifications.append(verification_data)
-        
         result = await db.collections["player_links"].update_one(
             {"_id": self._id},
-            {
-                "$pull": {
-                    "pending_verifications": {
-                        "server_id": server_id
-                    }
-                }
-            }
+            {"$set": update_data}
         )
         
-        result = await db.collections["player_links"].update_one(
-            {"_id": self._id},
-            {
-                "$push": {
-                    "pending_verifications": verification_data
-                },
-                "$set": {
-                    "updated_at": now
-                }
-            }
-        )
+        # Update local data
+        self.is_verified = True
+        self.verified_at = now
+        self.updated_at = now
         
-        # Invalidate caches
+        # Get player and update stats
+        player = await Player.get_by_player_id(self.server_id, self.player_id)
+        if not player:
+            # Create player if it doesn't exist
+            player = await Player.create_or_update(
+                self.server_id,
+                self.player_id,
+                self.player_name
+            )
+        
+        # Clear cache
         AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
+        AsyncCache.invalidate(self.__class__.get_by_player, self.server_id, self.player_id)
+        AsyncCache.invalidate(self.__class__.get_by_discord, self.server_id, self.discord_id)
+        AsyncCache.invalidate(self.__class__.get_by_verification_code, self.verification_code)
         
-        return token
+        return result.acknowledged
     
-    async def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
-        """Verify a token and add the player to the link
+    async def refresh_verification(self) -> str:
+        """Refresh verification code
+        
+        Returns:
+            str: New verification code
+            
+        Raises:
+            ValueError: If already verified
+        """
+        # Check if already verified
+        if self.is_verified:
+            raise ValueError("Cannot refresh verification for verified link")
+            
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Generate new verification code
+        verification_code = self._generate_verification_code()
+        verification_expiry = now + timedelta(hours=VERIFICATION_EXPIRY_HOURS)
+        
+        # Update player link
+        update_data = {
+            "verification_code": verification_code,
+            "verification_expiry": verification_expiry,
+            "updated_at": now
+        }
+        
+        result = await db.collections["player_links"].update_one(
+            {"_id": self._id},
+            {"$set": update_data}
+        )
+        
+        # Update local data
+        self.verification_code = verification_code
+        self.verification_expiry = verification_expiry
+        self.updated_at = now
+        
+        # Clear cache
+        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
+        AsyncCache.invalidate(self.__class__.get_by_player, self.server_id, self.player_id)
+        AsyncCache.invalidate(self.__class__.get_by_discord, self.server_id, self.discord_id)
+        if hasattr(self, "old_verification_code"):
+            AsyncCache.invalidate(self.__class__.get_by_verification_code, self.old_verification_code)
+        
+        return verification_code
+    
+    async def update_player_name(self, player_name: str) -> bool:
+        """Update player name
         
         Args:
-            token: Verification token
+            player_name: New player name
             
         Returns:
-            Dict or None: Verification data if successful
+            bool: True if successful
         """
-        # Find matching token
-        verification = None
-        for v in self.pending_verifications:
-            if v.get("token") == token:
-                verification = v
-                break
-        
-        if not verification:
-            # Token not found
-            return None
-        
-        # Check if token is expired
-        expires_at = verification.get("expires_at")
-        if expires_at and expires_at < datetime.utcnow():
-            # Token expired
-            return None
-        
-        # Extract server and player IDs
-        server_id = verification.get("server_id")
-        player_id = verification.get("player_id")
-        
-        if not server_id or not player_id:
-            # Invalid verification data
-            return None
-        
-        # Add player to link
-        await self.add_player(server_id, player_id)
-        
-        # Remove verification
         db = await get_db()
+        now = datetime.utcnow()
         
-        self.pending_verifications = [v for v in self.pending_verifications if v.get("token") != token]
+        # Update player link
+        update_data = {
+            "player_name": player_name,
+            "updated_at": now
+        }
         
         result = await db.collections["player_links"].update_one(
             {"_id": self._id},
-            {
-                "$pull": {
-                    "pending_verifications": {
-                        "token": token
-                    }
-                }
-            }
+            {"$set": update_data}
         )
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
+        # Update local data
+        self.player_name = player_name
+        self.updated_at = now
         
-        return {
-            "server_id": server_id,
-            "player_id": player_id
+        # Update player if exists
+        player = await Player.get_by_player_id(self.server_id, self.player_id)
+        if player:
+            await player.update({"player_name": player_name})
+        
+        # Clear cache
+        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
+        AsyncCache.invalidate(self.__class__.get_by_player, self.server_id, self.player_id)
+        AsyncCache.invalidate(self.__class__.get_by_discord, self.server_id, self.discord_id)
+        
+        return result.acknowledged
+    
+    async def update_discord_name(self, discord_name: str) -> bool:
+        """Update Discord username
+        
+        Args:
+            discord_name: New Discord username
+            
+        Returns:
+            bool: True if successful
+        """
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Update player link
+        update_data = {
+            "discord_name": discord_name,
+            "updated_at": now
         }
+        
+        result = await db.collections["player_links"].update_one(
+            {"_id": self._id},
+            {"$set": update_data}
+        )
+        
+        # Update local data
+        self.discord_name = discord_name
+        self.updated_at = now
+        
+        # Clear cache
+        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
+        AsyncCache.invalidate(self.__class__.get_by_player, self.server_id, self.player_id)
+        AsyncCache.invalidate(self.__class__.get_by_discord, self.server_id, self.discord_id)
+        
+        return result.acknowledged
     
     async def delete(self) -> bool:
         """Delete the player link
         
         Returns:
-            bool: True if successfully deleted
+            bool: True if successful
         """
         db = await get_db()
         
-        # Store player IDs for cache invalidation
-        player_servers = [(p.get("server_id"), p.get("player_id")) for p in self.players]
-        
-        # Delete player link
         result = await db.collections["player_links"].delete_one({"_id": self._id})
         
-        # Invalidate caches
+        # Clear cache
         AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_discord_id, self.discord_id)
-        
-        for server_id, player_id in player_servers:
-            if server_id and player_id:
-                AsyncCache.invalidate(self.__class__.get_by_player_id, server_id, player_id)
+        AsyncCache.invalidate(self.__class__.get_by_player, self.server_id, self.player_id)
+        AsyncCache.invalidate(self.__class__.get_by_discord, self.server_id, self.discord_id)
+        if self.verification_code:
+            AsyncCache.invalidate(self.__class__.get_by_verification_code, self.verification_code)
         
         return result.deleted_count > 0
+    
+    @staticmethod
+    def _generate_verification_code() -> str:
+        """Generate a random verification code
+        
+        Returns:
+            str: Verification code
+        """
+        # Use uppercase letters and digits
+        alphabet = string.ascii_uppercase + string.digits
+        # Remove similar looking characters
+        alphabet = alphabet.replace('0', '').replace('O', '').replace('1', '').replace('I', '')
+        
+        # Generate random code
+        return ''.join(secrets.choice(alphabet) for _ in range(VERIFICATION_CODE_LENGTH))
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert player link to dictionary
+        
+        Returns:
+            Dict: Player link data
+        """
+        return {
+            "id": self.id,
+            "server_id": self.server_id,
+            "player_id": self.player_id,
+            "player_name": self.player_name,
+            "discord_id": self.discord_id,
+            "discord_name": self.discord_name,
+            "is_verified": self.is_verified,
+            "is_expired": self.is_expired,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+        }

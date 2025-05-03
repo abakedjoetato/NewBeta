@@ -1,331 +1,447 @@
 """
-Server Config model for the Tower of Temptation PvP Statistics Discord Bot.
+Server Configuration model for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. ServerConfig class for storing server-specific settings
-2. Methods for creating and retrieving server configs
-3. Configuration validation and defaults
+1. Server configuration storage
+2. Default settings
+3. Configuration validation
+4. Discord channel/role management
 """
 import logging
 import re
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Set, Union, TypeVar
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Union, Set, Tuple
 
 from utils.database import get_db
 from utils.async_utils import AsyncCache
 
 logger = logging.getLogger(__name__)
 
-# Type variables
-SC = TypeVar('SC', bound='ServerConfig')
-
 class ServerConfig:
-    """Server Config class for server-specific settings"""
+    """Server configuration for a Discord guild"""
     
-    # Default settings
-    DEFAULT_SETTINGS = {
-        "premium": False,
-        "csv_pattern": r"\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}\.csv",
+    # Collection name in database
+    COLLECTION_NAME = "server_configs"
+    
+    # Default values
+    DEFAULT_VALUES = {
+        "prefix": "!",
+        "enabled": True,
+        "admin_role_id": None,
+        "moderator_role_id": None,
+        "stats_channel_id": None,
+        "announcements_channel_id": None,
+        "leaderboard_channel_id": None,
+        "update_interval": 60,  # in minutes
         "leaderboard_size": 10,
-        "update_interval": 5,  # minutes
-        "sftp_enabled": False,
-        "sftp_host": "",
+        "timezone": "UTC",
+        "language": "en",
+        "sftp_host": None,
         "sftp_port": 22,
-        "sftp_username": "",
-        "sftp_password": "",
-        "sftp_path": "/logs",
-        "faction_enabled": True,
-        "player_link_enabled": True,
-        "rivalry_enabled": True,
-        "theme_color": 0x7289DA,  # Discord Blurple
-        "log_channel_id": None,
-        "admin_role_ids": [],
-        "mod_role_ids": []
+        "sftp_username": None,
+        "sftp_password": None,
+        "sftp_key_path": None,
+        "sftp_base_path": "/",
+        "sftp_pattern": None,
+        "features": {
+            "player_stats": True,
+            "faction_stats": True,
+            "rivalry_stats": True,
+            "event_tracking": True,
+        },
+        "custom_emojis": {},
+        "leaderboard_types": ["kills", "deaths", "kd_ratio", "longest_kill", "playtime"],
+        "enabled_commands": [],
+        "disabled_commands": [],
+        "command_cooldowns": {},
+        "verification_required": False,
+        "welcome_message": None,
+        "faction_colors": {},
+        "faction_icons": {},
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "last_stats_post": None,
     }
     
     def __init__(self, data: Dict[str, Any]):
-        """Initialize a server config
+        """Initialize server config from database document
         
         Args:
-            data: Server config data from database
+            data: Document from database
         """
-        self.data = data
         self._id = data.get("_id")
         self.guild_id = data.get("guild_id")
-        self.server_id = data.get("server_id")
-        self.server_name = data.get("server_name", "Unknown Server")
-        self.settings = data.get("settings", {})
-        self.created_at = data.get("created_at")
-        self.updated_at = data.get("updated_at")
+        self.guild_name = data.get("guild_name")
         
-        # Apply default settings for missing values
-        for key, default_value in self.DEFAULT_SETTINGS.items():
-            if key not in self.settings:
-                self.settings[key] = default_value
+        # Apply defaults for missing values
+        for key, default in self.DEFAULT_VALUES.items():
+            if isinstance(default, dict) and key in data and isinstance(data[key], dict):
+                # Merge nested dictionaries
+                setattr(self, key, {**default, **data[key]})
+            else:
+                # Use value from data or default
+                setattr(self, key, data.get(key, default))
+        
+        # Convert datetime strings to datetime objects
+        for field in ["created_at", "updated_at", "last_stats_post"]:
+            value = getattr(self, field, None)
+            if isinstance(value, str):
+                try:
+                    setattr(self, field, datetime.fromisoformat(value))
+                except (ValueError, TypeError):
+                    setattr(self, field, None)
     
     @property
     def id(self) -> str:
-        """Get server config ID
+        """Get document ID
         
         Returns:
-            str: Server config ID
+            str: Document ID
         """
-        return str(self._id)
+        return str(self._id) if self._id else None
     
-    @property
-    def is_premium(self) -> bool:
-        """Check if server has premium status
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for database storage
         
         Returns:
-            bool: True if server has premium status
+            Dict: Dictionary representation
         """
-        return self.settings.get("premium", False)
+        # Get all attributes
+        result = {
+            "guild_id": self.guild_id,
+            "guild_name": self.guild_name,
+        }
+        
+        # Add all configuration values
+        for key in self.DEFAULT_VALUES.keys():
+            value = getattr(self, key, None)
+            
+            # Convert datetime objects to ISO format strings
+            if isinstance(value, datetime):
+                value = value.isoformat()
+                
+            result[key] = value
+        
+        # Add document ID if available
+        if self._id:
+            result["_id"] = self._id
+            
+        return result
     
-    @property
-    def sftp_config(self) -> Dict[str, Any]:
+    async def update(self) -> bool:
+        """Update server config in database
+        
+        Returns:
+            bool: True if successful
+        """
+        if not self.guild_id:
+            logger.error("Cannot update server config: guild_id is missing")
+            return False
+            
+        # Update timestamp
+        self.updated_at = datetime.utcnow()
+        
+        # Convert to dictionary
+        data = self.to_dict()
+        
+        # Get database
+        db = await get_db()
+        
+        # Update document
+        if self._id:
+            # Update existing document
+            result = await db.update_document(
+                self.COLLECTION_NAME,
+                {"_id": self._id},
+                {"$set": data}
+            )
+        else:
+            # Insert new document
+            inserted_id = await db.insert_document(self.COLLECTION_NAME, data)
+            if inserted_id:
+                self._id = inserted_id
+                result = True
+            else:
+                result = False
+                
+        # Invalidate cache
+        if result:
+            AsyncCache.invalidate(ServerConfig.get_by_guild_id, self.guild_id)
+            AsyncCache.invalidate(ServerConfig.get_by_id, self.id)
+            
+        return result
+    
+    async def delete(self) -> bool:
+        """Delete server config from database
+        
+        Returns:
+            bool: True if successful
+        """
+        if not self._id:
+            logger.error("Cannot delete server config: _id is missing")
+            return False
+            
+        # Get database
+        db = await get_db()
+        
+        # Delete document
+        result = await db.delete_document(self.COLLECTION_NAME, {"_id": self._id})
+        
+        # Invalidate cache
+        if result:
+            AsyncCache.invalidate(ServerConfig.get_by_guild_id, self.guild_id)
+            AsyncCache.invalidate(ServerConfig.get_by_id, self.id)
+            
+        return result
+    
+    def get_enabled_features(self) -> List[str]:
+        """Get list of enabled features
+        
+        Returns:
+            List[str]: List of enabled feature names
+        """
+        features = []
+        
+        if self.features.get("player_stats"):
+            features.append("Player Stats")
+            
+        if self.features.get("faction_stats"):
+            features.append("Faction Stats")
+            
+        if self.features.get("rivalry_stats"):
+            features.append("Rivalry Stats")
+            
+        if self.features.get("event_tracking"):
+            features.append("Event Tracking")
+            
+        return features
+    
+    def get_features_string(self) -> str:
+        """Get formatted string of enabled features
+        
+        Returns:
+            str: Formatted feature string
+        """
+        features = self.get_enabled_features()
+        
+        if not features:
+            return "No features enabled"
+            
+        return ", ".join(features)
+    
+    def has_sftp_config(self) -> bool:
+        """Check if SFTP configuration is complete
+        
+        Returns:
+            bool: True if SFTP configuration is complete
+        """
+        return bool(
+            self.sftp_host and
+            self.sftp_username and
+            (self.sftp_password or self.sftp_key_path)
+        )
+    
+    def get_sftp_config(self) -> Dict[str, Any]:
         """Get SFTP configuration
         
         Returns:
             Dict: SFTP configuration
         """
         return {
-            "enabled": self.settings.get("sftp_enabled", False),
-            "host": self.settings.get("sftp_host", ""),
-            "port": self.settings.get("sftp_port", 22),
-            "username": self.settings.get("sftp_username", ""),
-            "password": self.settings.get("sftp_password", ""),
-            "path": self.settings.get("sftp_path", "/logs")
+            "host": self.sftp_host,
+            "port": self.sftp_port,
+            "username": self.sftp_username,
+            "password": self.sftp_password,
+            "key_path": self.sftp_key_path,
+            "base_path": self.sftp_base_path,
+            "pattern": self.sftp_pattern
         }
     
-    @property
-    def theme_color(self) -> int:
-        """Get theme color
-        
-        Returns:
-            int: Theme color
-        """
-        return self.settings.get("theme_color", 0x7289DA)
-    
-    @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_by_id(cls, config_id: str) -> Optional['ServerConfig']:
-        """Get server config by ID
+    def is_command_enabled(self, command_name: str) -> bool:
+        """Check if command is enabled
         
         Args:
-            config_id: Server config ID
+            command_name: Command name
             
         Returns:
-            ServerConfig or None: Server config if found
+            bool: True if command is enabled
         """
-        db = await get_db()
-        config_data = await db.collections["server_configs"].find_one({"_id": config_id})
-        
-        if not config_data:
-            return None
-        
-        return cls(config_data)
+        if command_name in self.disabled_commands:
+            return False
+            
+        if self.enabled_commands and command_name not in self.enabled_commands:
+            return False
+            
+        return True
     
-    @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_by_guild_id(cls, guild_id: int) -> Optional['ServerConfig']:
-        """Get server config by Discord guild ID
+    def get_command_cooldown(self, command_name: str) -> int:
+        """Get command cooldown in seconds
         
         Args:
-            guild_id: Discord guild ID
+            command_name: Command name
             
         Returns:
-            ServerConfig or None: Server config if found
+            int: Cooldown in seconds (0 for no cooldown)
         """
+        return self.command_cooldowns.get(command_name, 0)
+    
+    @staticmethod
+    async def ensure_indexes() -> bool:
+        """Create database indexes
+        
+        Returns:
+            bool: True if successful
+        """
+        # Get database
         db = await get_db()
-        config_data = await db.collections["server_configs"].find_one({"guild_id": guild_id})
         
-        if not config_data:
-            return None
+        # Create unique index on guild_id
+        result1 = await db.create_index(
+            ServerConfig.COLLECTION_NAME,
+            [("guild_id", 1)],
+            unique=True,
+            name="guild_id_unique"
+        )
         
-        return cls(config_data)
+        # Create index on updated_at
+        result2 = await db.create_index(
+            ServerConfig.COLLECTION_NAME,
+            [("updated_at", -1)],
+            name="updated_at_desc"
+        )
+        
+        return bool(result1 and result2)
     
     @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_by_server_id(cls, server_id: str) -> Optional['ServerConfig']:
-        """Get server config by server ID
+    @AsyncCache.cached(ttl=300)
+    async def get_by_id(cls, id: str) -> Optional["ServerConfig"]:
+        """Get server config by document ID
         
         Args:
-            server_id: Server ID
+            id: Document ID
             
         Returns:
-            ServerConfig or None: Server config if found
+            ServerConfig or None: Server config or None if not found
         """
+        # Get database
         db = await get_db()
-        config_data = await db.collections["server_configs"].find_one({"server_id": server_id})
         
-        if not config_data:
-            return None
+        # Get document
+        document = await db.get_document(cls.COLLECTION_NAME, {"_id": id})
         
-        return cls(config_data)
+        if document:
+            return cls(document)
+            
+        return None
     
     @classmethod
-    async def get_all(cls) -> List['ServerConfig']:
-        """Get all server configs
-        
-        Returns:
-            List[ServerConfig]: List of all server configs
-        """
-        db = await get_db()
-        configs_data = await db.collections["server_configs"].find({}).to_list(length=None)
-        
-        return [cls(data) for data in configs_data]
-    
-    @classmethod
-    async def create(
-        cls,
-        guild_id: int,
-        server_id: str,
-        server_name: str,
-        settings: Optional[Dict[str, Any]] = None
-    ) -> 'ServerConfig':
-        """Create a new server config
+    @AsyncCache.cached(ttl=300)
+    async def get_by_guild_id(cls, guild_id: Union[str, int]) -> Optional["ServerConfig"]:
+        """Get server config by guild ID
         
         Args:
             guild_id: Discord guild ID
-            server_id: Server ID
-            server_name: Server name
-            settings: Server settings (optional)
             
         Returns:
-            ServerConfig: Created server config
-            
-        Raises:
-            ValueError: If a config already exists for this guild or server
+            ServerConfig or None: Server config or None if not found
         """
-        # Check if config already exists for this guild
-        existing_guild = await cls.get_by_guild_id(guild_id)
-        if existing_guild:
-            return existing_guild
+        # Convert guild_id to string if it's an integer
+        if isinstance(guild_id, int):
+            guild_id = str(guild_id)
+            
+        # Get database
+        db = await get_db()
         
-        # Check if config already exists for this server
-        existing_server = await cls.get_by_server_id(server_id)
-        if existing_server:
-            raise ValueError(f"Server config already exists for server ID {server_id}")
+        # Get document
+        document = await db.get_document(cls.COLLECTION_NAME, {"guild_id": guild_id})
         
+        if document:
+            return cls(document)
+            
+        return None
+    
+    @classmethod
+    async def create(cls, guild_id: Union[str, int], guild_name: str) -> Optional["ServerConfig"]:
+        """Create new server config
+        
+        Args:
+            guild_id: Discord guild ID
+            guild_name: Discord guild name
+            
+        Returns:
+            ServerConfig or None: Created server config or None if error
+        """
+        # Convert guild_id to string if it's an integer
+        if isinstance(guild_id, int):
+            guild_id = str(guild_id)
+            
+        # Get database
+        db = await get_db()
+        
+        # Check if config already exists
+        existing = await db.get_document(cls.COLLECTION_NAME, {"guild_id": guild_id})
+        if existing:
+            logger.warning(f"Server config already exists for guild {guild_id}")
+            return cls(existing)
+            
+        # Create new document
         now = datetime.utcnow()
-        db = await get_db()
-        
-        # Use default settings if none provided
-        if settings is None:
-            settings = cls.DEFAULT_SETTINGS.copy()
-        
-        # Create server config
-        config_data = {
+        document = {
             "guild_id": guild_id,
-            "server_id": server_id,
-            "server_name": server_name,
-            "settings": settings,
+            "guild_name": guild_name,
             "created_at": now,
             "updated_at": now
         }
         
-        result = await db.collections["server_configs"].insert_one(config_data)
-        config_data["_id"] = result.inserted_id
+        # Insert document
+        inserted_id = await db.insert_document(cls.COLLECTION_NAME, document)
         
-        # Invalidate caches
-        AsyncCache.invalidate_all(cls.get_by_guild_id)
-        AsyncCache.invalidate_all(cls.get_by_server_id)
-        
-        return cls(config_data)
-    
-    async def update(self, settings: Dict[str, Any]) -> 'ServerConfig':
-        """Update server config settings
-        
-        Args:
-            settings: Settings to update
+        if not inserted_id:
+            logger.error(f"Failed to create server config for guild {guild_id}")
+            return None
             
+        # Get created document
+        created = await db.get_document(cls.COLLECTION_NAME, {"_id": inserted_id})
+        
+        if created:
+            return cls(created)
+            
+        return None
+    
+    @classmethod
+    async def get_all(cls) -> List["ServerConfig"]:
+        """Get all server configs
+        
         Returns:
-            ServerConfig: Updated server config
+            List[ServerConfig]: List of server configs
         """
-        now = datetime.utcnow()
+        # Get database
         db = await get_db()
         
-        # Update only specified settings
-        for key, value in settings.items():
-            self.settings[key] = value
-        
-        result = await db.collections["server_configs"].update_one(
-            {"_id": self._id},
-            {
-                "$set": {
-                    "settings": self.settings,
-                    "updated_at": now
-                }
-            }
+        # Get all documents
+        documents = await db.get_documents(
+            cls.COLLECTION_NAME,
+            {},
+            sort=[("updated_at", -1)]
         )
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_guild_id, self.guild_id)
-        AsyncCache.invalidate(self.__class__.get_by_server_id, self.server_id)
-        
-        return self
+        return [cls(doc) for doc in documents]
     
-    async def update_server_info(self, server_name: str) -> 'ServerConfig':
-        """Update server information
+    @classmethod
+    async def get_enabled(cls) -> List["ServerConfig"]:
+        """Get enabled server configs
         
-        Args:
-            server_name: New server name
-            
         Returns:
-            ServerConfig: Updated server config
+            List[ServerConfig]: List of enabled server configs
         """
-        now = datetime.utcnow()
+        # Get database
         db = await get_db()
         
-        self.server_name = server_name
-        
-        result = await db.collections["server_configs"].update_one(
-            {"_id": self._id},
-            {
-                "$set": {
-                    "server_name": server_name,
-                    "updated_at": now
-                }
-            }
+        # Get enabled documents
+        documents = await db.get_documents(
+            cls.COLLECTION_NAME,
+            {"enabled": True},
+            sort=[("updated_at", -1)]
         )
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_guild_id, self.guild_id)
-        AsyncCache.invalidate(self.__class__.get_by_server_id, self.server_id)
-        
-        return self
-    
-    async def delete(self) -> bool:
-        """Delete the server config
-        
-        Returns:
-            bool: True if successfully deleted
-        """
-        db = await get_db()
-        
-        result = await db.collections["server_configs"].delete_one({"_id": self._id})
-        
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_guild_id, self.guild_id)
-        AsyncCache.invalidate(self.__class__.get_by_server_id, self.server_id)
-        
-        return result.deleted_count > 0
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert server config to dictionary
-        
-        Returns:
-            Dict: Server config data
-        """
-        return {
-            "id": self.id,
-            "guild_id": self.guild_id,
-            "server_id": self.server_id,
-            "server_name": self.server_name,
-            "settings": self.settings,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
-        }
+        return [cls(doc) for doc in documents]

@@ -1,343 +1,450 @@
 """
-CSV parser for the Tower of Temptation PvP Statistics Discord Bot.
+CSV Parser for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. Parser for death event CSV files from game servers
-2. Functions for extracting relevant PvP information
-3. Data normalization and validation
+1. CSV file parsing
+2. Event extraction
+3. Log processing
+4. Statistics aggregation
 """
 import csv
-import logging
+import io
 import re
-from datetime import datetime
-from io import StringIO
-from typing import Dict, List, Optional, Set, Tuple, Any, Union
-
-from models.rivalry import Rivalry
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Union, Set, Tuple, BinaryIO, TextIO, Iterator
 
 logger = logging.getLogger(__name__)
 
-# Constants
-SUICIDE_KEYWORDS = ["suicide", "fall_damage", "drowning", "relocation"]
-VALID_WEAPON_CATEGORIES = {
-    "melee", "pistol", "rifle", "shotgun", "sniper", 
-    "smg", "explosive", "environment", "unknown"
-}
-
 class CSVParser:
-    """Parser for CSV files containing death events"""
+    """CSV file parser for game log files"""
     
-    def __init__(self):
-        """Initialize CSV parser"""
-        self.processed_entries = set()  # Track processed entries to avoid duplicates
+    # Define standard log formats
+    LOG_FORMATS = {
+        "deadside": {
+            "separator": ";",
+            "columns": ["timestamp", "killer_name", "killer_id", "victim_name", "victim_id", "weapon", "distance", "platform"],
+            "datetime_format": "%Y-%m-%d %H:%M:%S",
+            "datetime_column": "timestamp"
+        },
+        "custom": {
+            "separator": ",",
+            "columns": ["timestamp", "event_type", "player1_name", "player1_id", "player2_name", "player2_id", "details", "location"],
+            "datetime_format": "%Y-%m-%d %H:%M:%S",
+            "datetime_column": "timestamp"
+        }
+    }
     
-    def parse_death_events(self, csv_content: str) -> List[Dict[str, Any]]:
-        """Parse death events from CSV content
+    def __init__(self, format_name: str = "deadside"):
+        """Initialize CSV parser with specified format
         
         Args:
-            csv_content: Raw CSV content as string
+            format_name: Log format name (default: "deadside")
+        """
+        self.format_name = format_name
+        
+        # Get format configuration
+        if format_name in self.LOG_FORMATS:
+            self.format_config = self.LOG_FORMATS[format_name]
+        else:
+            # Default to deadside format
+            logger.warning(f"Unknown log format: {format_name}, using deadside format")
+            self.format_name = "deadside"
+            self.format_config = self.LOG_FORMATS["deadside"]
+            
+        # Extract configuration
+        self.separator = self.format_config["separator"]
+        self.columns = self.format_config["columns"]
+        self.datetime_format = self.format_config["datetime_format"]
+        self.datetime_column = self.format_config["datetime_column"]
+    
+    def parse_csv_data(self, data: Union[str, bytes]) -> List[Dict[str, Any]]:
+        """Parse CSV data and return list of events
+        
+        Args:
+            data: CSV data string or bytes
             
         Returns:
-            List[Dict]: List of parsed death events
+            List[Dict]: List of parsed event dictionaries
         """
-        # Check if the content is empty
-        if not csv_content.strip():
-            logger.warning("Empty CSV content provided")
-            return []
+        # Convert bytes to string if needed
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", errors="replace")
             
-        death_events = []
+        # Create CSV reader
+        csv_file = io.StringIO(data)
         
+        # Parse CSV data
         try:
-            # Split lines and process each line
-            lines = csv_content.splitlines()
-            for line in lines:
-                if not line.strip():
-                    continue
-                    
-                # Process the line
-                event = self.parse_kill_line(line)
-                if event:
-                    # Skip suicides
-                    if event.get('is_suicide', False):
-                        continue
-                        
-                    # Generate unique identifier
-                    event_id = self._generate_event_id(event)
-                    
-                    # Skip already processed entries
-                    if event_id in self.processed_entries:
-                        continue
-                        
-                    death_events.append(event)
-                    self.processed_entries.add(event_id)
-                    
-                    # Limit processed entry cache
-                    if len(self.processed_entries) > 10000:
-                        self.processed_entries = set(list(self.processed_entries)[-5000:])
-        
-        except Exception as e:
-            logger.error(f"Error parsing CSV: {str(e)}")
-        
-        return death_events
+            return self._parse_csv_file(csv_file)
+        finally:
+            csv_file.close()
     
-    def _generate_event_id(self, event: Dict[str, Any]) -> str:
-        """Generate a unique identifier for a death event
+    def parse_csv_file(self, file_path: str) -> List[Dict[str, Any]]:
+        """Parse CSV file and return list of events
         
         Args:
-            event: Processed event data
+            file_path: Path to CSV file
             
         Returns:
-            str: Unique event identifier
-        """
-        # Use timestamp, killer_id, and victim_id as a unique identifier
-        timestamp = event.get("timestamp", "")
-        if isinstance(timestamp, datetime):
-            timestamp = timestamp.strftime("%Y.%m.%d-%H.%M.%S")
-            
-        killer_id = event.get("killer_id", "")
-        victim_id = event.get("victim_id", "")
-        
-        return f"{timestamp}_{killer_id}_{victim_id}"
-    
-    def parse_kill_line(self, line: str) -> Optional[Dict[str, Any]]:
-        """Parse a single kill line from the CSV file
-        
-        Args:
-            line: Raw CSV line
-            
-        Returns:
-            Dict or None: Parsed kill data or None if invalid
+            List[Dict]: List of parsed event dictionaries
         """
         try:
-            # Split by semicolons
-            parts = line.strip().split(';')
-            
-            # Validate line format
-            if len(parts) < 7:
-                logger.debug(f"Invalid line format (too few fields): {line}")
-                return None
-                
-            # Extract fields based on position
-            timestamp_str = parts[0]
-            killer_name = parts[1]
-            killer_id = parts[2]
-            victim_name = parts[3]
-            victim_id = parts[4]
-            weapon = parts[5]
-            distance = parts[6]
-            
-            # Check for empty essential fields
-            if not killer_id or not victim_id:
-                logger.debug(f"Missing essential fields (killer_id or victim_id): {line}")
-                return None
-                
-            # Optional console fields
-            killer_console = parts[7] if len(parts) > 7 else None
-            victim_console = parts[8] if len(parts) > 8 else None
-            
-            # Parse timestamp
-            timestamp = self._parse_timestamp(timestamp_str)
-            if not timestamp:
-                logger.debug(f"Invalid timestamp: {timestamp_str}")
-                return None
-                
-            # Check for suicide (same killer and victim)
-            is_suicide = killer_id == victim_id
-            
-            # Also check weapon for suicide keywords
-            suicide_type = None
-            if any(keyword in weapon.lower() for keyword in SUICIDE_KEYWORDS):
-                is_suicide = True
-                suicide_type = weapon
-                
-            # Create event data
-            event = {
-                "timestamp": timestamp,
-                "killer_id": killer_id,
-                "killer_name": killer_name,
-                "victim_id": victim_id,
-                "victim_name": victim_name,
-                "weapon": self._normalize_weapon(weapon),
-                "distance": int(distance) if distance and distance.isdigit() else 0,
-                "is_suicide": is_suicide,
-                "killer_console": killer_console,
-                "victim_console": victim_console
-            }
-            
-            # Add suicide type if this is a suicide
-            if is_suicide and suicide_type:
-                event["suicide_type"] = suicide_type
-                
-            return event
-                
-        except Exception as e:
-            logger.error(f"Error parsing kill line: {str(e)}, Line: {line}")
-            return None
-            
-    def parse_kill_lines(self, lines: List[str]) -> List[Dict[str, Any]]:
-        """Parse multiple kill lines
+            with open(file_path, "r", encoding="utf-8") as file:
+                return self._parse_csv_file(file)
+        except UnicodeDecodeError:
+            # Try with different encoding
+            with open(file_path, "r", encoding="latin-1") as file:
+                return self._parse_csv_file(file)
+    
+    def _parse_csv_file(self, file: TextIO) -> List[Dict[str, Any]]:
+        """Parse CSV file and return list of events
         
         Args:
-            lines: List of raw CSV lines
+            file: File-like object
             
         Returns:
-            List[Dict]: List of parsed kill events
+            List[Dict]: List of parsed event dictionaries
         """
+        # Create CSV reader
+        csv_reader = csv.reader(file, delimiter=self.separator)
+        
+        # Skip header row if present
+        first_row = next(csv_reader, None)
+        
+        # Check if first row is header
+        is_header = False
+        if first_row:
+            # Check if first row contains column names
+            if all(col.lower() in [c.lower() for c in self.columns] for col in first_row):
+                is_header = True
+                
+        # Reset file position if first row is not header
+        if first_row and not is_header:
+            file.seek(0)
+            csv_reader = csv.reader(file, delimiter=self.separator)
+        
+        # Parse rows
         events = []
-        for line in lines:
-            event = self.parse_kill_line(line)
-            if event:
-                events.append(event)
+        for row in csv_reader:
+            # Skip empty rows
+            if not row or len(row) < len(self.columns):
+                continue
                 
+            # Create event dictionary
+            event = {}
+            for i, column in enumerate(self.columns):
+                if i < len(row):
+                    event[column] = row[i].strip()
+                else:
+                    event[column] = ""
+            
+            # Convert datetime column
+            if self.datetime_column in event:
+                try:
+                    event[self.datetime_column] = datetime.strptime(
+                        event[self.datetime_column], 
+                        self.datetime_format
+                    )
+                except (ValueError, TypeError):
+                    # Keep original string if parsing fails
+                    pass
+            
+            # Convert numeric columns
+            if self.format_name == "deadside":
+                # Convert distance to float
+                if "distance" in event:
+                    try:
+                        event["distance"] = float(event["distance"])
+                    except (ValueError, TypeError):
+                        event["distance"] = 0.0
+            
+            # Add event to list
+            events.append(event)
+            
         return events
     
-    def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:
-        """Parse timestamp from string
+    def filter_events(self, events: List[Dict[str, Any]], 
+                     start_time: Optional[datetime] = None,
+                     end_time: Optional[datetime] = None,
+                     player_id: Optional[str] = None,
+                     min_distance: Optional[float] = None,
+                     max_distance: Optional[float] = None,
+                     weapon: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Filter events by criteria
         
         Args:
-            timestamp_str: Timestamp string
+            events: List of events to filter
+            start_time: Start time for filtering (default: None)
+            end_time: End time for filtering (default: None)
+            player_id: Player ID for filtering (default: None)
+            min_distance: Minimum distance for filtering (default: None)
+            max_distance: Maximum distance for filtering (default: None)
+            weapon: Weapon name for filtering (default: None)
             
         Returns:
-            datetime or None: Parsed timestamp or None if invalid
+            List[Dict]: Filtered events
         """
-        try:
-            # First try the Deadside format: YYYY.MM.DD-HH.MM.SS
-            try:
-                return datetime.strptime(timestamp_str, "%Y.%m.%d-%H.%M.%S")
-            except ValueError:
-                pass
-                
-            # Try alternative formats
-            formats = [
-                "%Y-%m-%d %H:%M:%S",  # Standard format
-                "%Y-%m-%dT%H:%M:%S",  # ISO-like format
-                "%Y/%m/%d %H:%M:%S",  # Alternative format
-                "%Y%m%d%H%M%S"        # Compact format
+        # Start with all events
+        filtered_events = events
+        
+        # Filter by time range
+        if start_time or end_time:
+            filtered_events = [
+                event for event in filtered_events
+                if (not start_time or event.get(self.datetime_column, datetime.min) >= start_time) and
+                   (not end_time or event.get(self.datetime_column, datetime.max) <= end_time)
             ]
             
-            for fmt in formats:
-                try:
-                    return datetime.strptime(timestamp_str, fmt)
-                except ValueError:
-                    continue
+        # Filter by player ID
+        if player_id:
+            if self.format_name == "deadside":
+                filtered_events = [
+                    event for event in filtered_events
+                    if event.get("killer_id") == player_id or event.get("victim_id") == player_id
+                ]
+            elif self.format_name == "custom":
+                filtered_events = [
+                    event for event in filtered_events
+                    if event.get("player1_id") == player_id or event.get("player2_id") == player_id
+                ]
+                
+        # Filter by distance range
+        if (min_distance is not None or max_distance is not None) and "distance" in self.columns:
+            filtered_events = [
+                event for event in filtered_events
+                if ((min_distance is None or event.get("distance", 0) >= min_distance) and
+                    (max_distance is None or event.get("distance", float("inf")) <= max_distance))
+            ]
             
-            # If none of the formats match, try parsing Unix timestamp
-            if timestamp_str.isdigit():
-                return datetime.fromtimestamp(int(timestamp_str))
+        # Filter by weapon
+        if weapon and "weapon" in self.columns:
+            filtered_events = [
+                event for event in filtered_events
+                if event.get("weapon", "").lower() == weapon.lower()
+            ]
             
-            logger.warning(f"Unknown timestamp format: {timestamp_str}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error parsing timestamp '{timestamp_str}': {str(e)}")
-            return None
+        return filtered_events
     
-    def _normalize_weapon(self, weapon_str: str) -> str:
-        """Normalize weapon name
+    def aggregate_player_stats(self, events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Aggregate player statistics from events
         
         Args:
-            weapon_str: Raw weapon string
+            events: List of events
             
         Returns:
-            str: Normalized weapon name
+            Dict[str, Dict]: Dictionary of player statistics by player ID
         """
-        if not weapon_str:
-            return "Unknown"
+        # Initialize player stats
+        player_stats = {}
         
-        # Special case for suicide
-        if any(keyword in weapon_str.lower() for keyword in SUICIDE_KEYWORDS):
-            return "Suicide"
-        
-        # Remove prefixes and suffixes
-        weapon = weapon_str.strip()
-        
-        # Already normalized
-        return weapon
-    
-    def _normalize_location(self, location_str: str) -> str:
-        """Normalize location name
-        
-        Args:
-            location_str: Raw location string
-            
-        Returns:
-            str: Normalized location name
-        """
-        if not location_str:
-            return "Unknown"
-        
-        # Remove prefixes and suffixes
-        location = location_str.strip().lower()
-        location = re.sub(r'(^loc_|^location_|_location$)', '', location)
-        
-        # Capitalize words and replace underscores
-        location = ' '.join(word.capitalize() for word in location.split('_'))
-        
-        return location
-    
-    async def process_and_update_rivalries(
-        self,
-        server_id: str,
-        csv_content: str
-    ) -> Tuple[int, List[Dict[str, Any]]]:
-        """Process CSV content and update rivalries
-        
-        Args:
-            server_id: Server ID
-            csv_content: Raw CSV content
-            
-        Returns:
-            Tuple[int, List[Dict]]: Number of processed events and list of errors
-        """
-        death_events = self.parse_death_events(csv_content)
-        processed_count = 0
-        errors = []
-        
-        # Process each death event
-        for event in death_events:
-            try:
-                # Skip suicides
-                if event.get('is_suicide', False):
+        if self.format_name == "deadside":
+            # Process deadside format
+            for event in events:
+                killer_id = event.get("killer_id")
+                victim_id = event.get("victim_id")
+                
+                # Skip invalid events
+                if not killer_id or not victim_id:
                     continue
                     
-                # Extract data
-                killer_id = event["killer_id"]
-                killer_name = event["killer_name"]
-                victim_id = event["victim_id"]
-                victim_name = event["victim_name"]
-                weapon = event.get("weapon")
+                # Extract event details
+                killer_name = event.get("killer_name", "Unknown")
+                victim_name = event.get("victim_name", "Unknown")
+                weapon = event.get("weapon", "Unknown")
                 distance = event.get("distance", 0)
+                timestamp = event.get(self.datetime_column, datetime.now())
                 
-                # Use distance as "location" since deadside doesn't provide location
-                location = f"Distance: {distance}m"
+                # Update killer stats
+                if killer_id not in player_stats:
+                    player_stats[killer_id] = {
+                        "player_id": killer_id,
+                        "player_name": killer_name,
+                        "kills": 0,
+                        "deaths": 0,
+                        "weapons": {},
+                        "victims": {},
+                        "killers": {},
+                        "longest_kill": 0,
+                        "total_distance": 0,
+                        "first_seen": timestamp,
+                        "last_seen": timestamp
+                    }
+                    
+                killer_stats = player_stats[killer_id]
+                killer_stats["kills"] += 1
+                killer_stats["weapons"][weapon] = killer_stats["weapons"].get(weapon, 0) + 1
+                killer_stats["victims"][victim_id] = killer_stats["victims"].get(victim_id, 0) + 1
+                killer_stats["total_distance"] += distance
+                killer_stats["longest_kill"] = max(killer_stats["longest_kill"], distance)
+                killer_stats["last_seen"] = max(killer_stats["last_seen"], timestamp)
                 
-                # Skip empty names
-                if not killer_name or not victim_name:
-                    continue
+                # Update victim stats
+                if victim_id not in player_stats:
+                    player_stats[victim_id] = {
+                        "player_id": victim_id,
+                        "player_name": victim_name,
+                        "kills": 0,
+                        "deaths": 0,
+                        "weapons": {},
+                        "victims": {},
+                        "killers": {},
+                        "longest_kill": 0,
+                        "total_distance": 0,
+                        "first_seen": timestamp,
+                        "last_seen": timestamp
+                    }
+                    
+                victim_stats = player_stats[victim_id]
+                victim_stats["deaths"] += 1
+                victim_stats["killers"][killer_id] = victim_stats["killers"].get(killer_id, 0) + 1
+                victim_stats["last_seen"] = max(victim_stats["last_seen"], timestamp)
                 
-                # Record kill in rivalry system
-                await Rivalry.record_kill(
-                    server_id=server_id,
-                    killer_id=killer_id,
-                    killer_name=killer_name,
-                    victim_id=victim_id,
-                    victim_name=victim_name,
-                    weapon=weapon,
-                    location=location
-                )
-                
-                processed_count += 1
-                
-            except Exception as e:
-                logger.error(f"Error updating rivalry: {str(e)}")
-                errors.append({
-                    "event": event,
-                    "error": str(e)
-                })
+        elif self.format_name == "custom":
+            # Process custom format
+            pass
         
-        return processed_count, errors
+        # Calculate additional statistics
+        for player_id, stats in player_stats.items():
+            # Calculate K/D ratio
+            stats["kd_ratio"] = stats["kills"] / max(stats["deaths"], 1)
+            
+            # Calculate average kill distance
+            if stats["kills"] > 0:
+                stats["avg_kill_distance"] = stats["total_distance"] / stats["kills"]
+            else:
+                stats["avg_kill_distance"] = 0
+                
+            # Calculate playtime estimate
+            stats["playtime"] = (stats["last_seen"] - stats["first_seen"]).total_seconds() / 3600
+            
+            # Get favorite weapon
+            if stats["weapons"]:
+                stats["favorite_weapon"] = max(stats["weapons"].items(), key=lambda x: x[1])[0]
+            else:
+                stats["favorite_weapon"] = "None"
+                
+            # Get most killed player
+            if stats["victims"]:
+                most_killed_id = max(stats["victims"].items(), key=lambda x: x[1])[0]
+                stats["most_killed"] = {
+                    "player_id": most_killed_id,
+                    "player_name": player_stats.get(most_killed_id, {}).get("player_name", "Unknown"),
+                    "count": stats["victims"][most_killed_id]
+                }
+            else:
+                stats["most_killed"] = None
+                
+            # Get nemesis (player killed by the most)
+            if stats["killers"]:
+                nemesis_id = max(stats["killers"].items(), key=lambda x: x[1])[0]
+                stats["nemesis"] = {
+                    "player_id": nemesis_id,
+                    "player_name": player_stats.get(nemesis_id, {}).get("player_name", "Unknown"),
+                    "count": stats["killers"][nemesis_id]
+                }
+            else:
+                stats["nemesis"] = None
+        
+        return player_stats
     
-    def clear_cache(self):
-        """Clear the processed entries cache"""
-        self.processed_entries.clear()
-        logger.info("Cleared CSV parser cache")
+    def get_leaderboard(self, player_stats: Dict[str, Dict[str, Any]], stat_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Generate leaderboard from player statistics
+        
+        Args:
+            player_stats: Dictionary of player statistics by player ID
+            stat_name: Statistic name to rank by
+            limit: Maximum number of entries (default: 10)
+            
+        Returns:
+            List[Dict]: Leaderboard entries
+        """
+        # Sort players by statistic
+        sorted_players = sorted(
+            [stats for _, stats in player_stats.items()],
+            key=lambda x: x.get(stat_name, 0),
+            reverse=True
+        )
+        
+        # Create leaderboard entries
+        leaderboard = []
+        for i, player in enumerate(sorted_players[:limit]):
+            leaderboard.append({
+                "rank": i + 1,
+                "player_id": player["player_id"],
+                "player_name": player["player_name"],
+                "value": player.get(stat_name, 0)
+            })
+            
+        return leaderboard
+    
+    def detect_format(self, data: Union[str, bytes]) -> str:
+        """Detect log format from data
+        
+        Args:
+            data: CSV data string or bytes
+            
+        Returns:
+            str: Detected format name
+        """
+        # Convert bytes to string if needed
+        if isinstance(data, bytes):
+            data = data.decode("utf-8", errors="replace")
+            
+        # Create CSV reader for each format
+        csv_file = io.StringIO(data)
+        
+        try:
+            # Get first line
+            first_line = csv_file.readline().strip()
+            
+            # Reset file position
+            csv_file.seek(0)
+            
+            # Check semicolon separator (deadside)
+            if ";" in first_line and len(first_line.split(";")) >= 7:
+                separator = ";"
+                parts = first_line.split(";")
+                
+                # Check for timestamp format
+                if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", parts[0]):
+                    return "deadside"
+            
+            # Check comma separator (custom)
+            if "," in first_line and len(first_line.split(",")) >= 6:
+                separator = ","
+                parts = first_line.split(",")
+                
+                # Check for timestamp format
+                if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", parts[0]):
+                    return "custom"
+            
+            # Default to deadside
+            return "deadside"
+            
+        finally:
+            csv_file.close()
+    
+    def add_custom_format(self, format_name: str, format_config: Dict[str, Any]) -> None:
+        """Add custom log format
+        
+        Args:
+            format_name: Format name
+            format_config: Format configuration
+        """
+        # Validate format configuration
+        required_keys = ["separator", "columns", "datetime_format", "datetime_column"]
+        for key in required_keys:
+            if key not in format_config:
+                raise ValueError(f"Missing required key in format config: {key}")
+                
+        # Add format to LOG_FORMATS
+        self.LOG_FORMATS[format_name] = format_config
+        
+        # Update current format if matching
+        if format_name == self.format_name:
+            self.format_config = format_config
+            self.separator = format_config["separator"]
+            self.columns = format_config["columns"]
+            self.datetime_format = format_config["datetime_format"]
+            self.datetime_column = format_config["datetime_column"]

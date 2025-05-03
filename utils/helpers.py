@@ -1,581 +1,365 @@
 """
-Helper utilities for the Tower of Temptation PvP Statistics Discord Bot.
+Helper Functions for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. Pagination utilities for embeds and messages
-2. Permission checking functions
-3. UI components for interactive buttons and selects
-4. Confirmation dialogs and message formatting
+1. General utility functions for the bot
+2. Discord-specific utilities
+3. Text formatting helpers
+4. Common conversion functions
 """
-import asyncio
-import logging
 import re
+import logging
+import random
+import string
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Callable
+from typing import Dict, List, Optional, Any, Union, Set, Tuple, cast
 
 import discord
 from discord.ext import commands
 
+from models.server_config import ServerConfig
+
 logger = logging.getLogger(__name__)
 
-# Permission check functions
-def has_admin_permission(interaction: discord.Interaction) -> bool:
-    """Check if user has administrator permission
+def generate_random_code(length: int = 6) -> str:
+    """Generate random verification code
     
     Args:
-        interaction: Discord interaction
+        length: Code length (default: 6)
         
     Returns:
-        bool: True if user has administrator permission
+        str: Random code
     """
-    if interaction.guild is None:
+    # Generate random code using uppercase letters and digits
+    # Exclude similar looking characters like O, 0, I, 1, etc.
+    chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def format_timedelta(delta: timedelta) -> str:
+    """Format timedelta as human-readable string
+    
+    Args:
+        delta: Timedelta to format
+        
+    Returns:
+        str: Formatted string
+    """
+    # Convert to total seconds
+    total_seconds = int(delta.total_seconds())
+    
+    # Calculate components
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    # Build string
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0 or hours > 0 or days > 0:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    
+    return " ".join(parts)
+
+def format_time_ago(dt: datetime) -> str:
+    """Format datetime as time ago string
+    
+    Args:
+        dt: Datetime to format
+        
+    Returns:
+        str: Formatted string
+    """
+    # Calculate time difference
+    now = datetime.utcnow()
+    delta = now - dt
+    
+    # Format based on range
+    if delta.total_seconds() < 60:
+        return "just now"
+    elif delta.total_seconds() < 3600:
+        minutes = int(delta.total_seconds() / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif delta.total_seconds() < 86400:
+        hours = int(delta.total_seconds() / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif delta.days < 7:
+        return f"{delta.days} day{'s' if delta.days != 1 else ''} ago"
+    elif delta.days < 30:
+        weeks = int(delta.days / 7)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    elif delta.days < 365:
+        months = int(delta.days / 30)
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    else:
+        years = int(delta.days / 365)
+        return f"{years} year{'s' if years != 1 else ''} ago"
+
+async def get_prefix(bot: commands.Bot, message: discord.Message) -> Union[List[str], str]:
+    """Get command prefix for guild
+    
+    Args:
+        bot: Bot instance
+        message: Message
+        
+    Returns:
+        Union[List[str], str]: Command prefix(es)
+    """
+    # DM channel has no guild
+    if message.guild is None:
+        return commands.when_mentioned_or("!")(bot, message)
+        
+    # Get server config
+    server_config = await ServerConfig.get_by_guild_id(message.guild.id)
+    if server_config and server_config.prefix:
+        # Use custom prefix
+        return commands.when_mentioned_or(server_config.prefix)(bot, message)
+        
+    # Default prefix
+    return commands.when_mentioned_or("!")(bot, message)
+
+async def check_admin_permissions(ctx: commands.Context) -> bool:
+    """Check if user has admin permissions
+    
+    Args:
+        ctx: Command context
+        
+    Returns:
+        bool: True if user has admin permissions
+    """
+    # Bot owner always has admin permissions
+    if await ctx.bot.is_owner(ctx.author):
+        return True
+        
+    # DM channel has no guild
+    if ctx.guild is None:
         return False
-    
-    if interaction.user.id == interaction.guild.owner_id:
+        
+    # Server owner always has admin permissions
+    if ctx.guild.owner_id == ctx.author.id:
         return True
-    
-    if interaction.user.guild_permissions.administrator:
+        
+    # Check for admin role
+    server_config = await ServerConfig.get_by_guild_id(ctx.guild.id)
+    if server_config and server_config.admin_role_id:
+        # Check if user has admin role
+        member = ctx.guild.get_member(ctx.author.id)
+        if member and any(role.id == server_config.admin_role_id for role in member.roles):
+            return True
+            
+    # Check for administrator permission
+    if ctx.author.guild_permissions.administrator:
         return True
-    
+        
     return False
 
-def has_mod_permission(interaction: discord.Interaction) -> bool:
-    """Check if user has moderator permission
+def sanitize_string(text: str) -> str:
+    """Sanitize string for database storage
     
     Args:
-        interaction: Discord interaction
+        text: Text to sanitize
         
     Returns:
-        bool: True if user has moderator permission
+        str: Sanitized string
     """
-    if interaction.guild is None:
-        return False
+    # Limit length
+    if len(text) > 100:
+        text = text[:100]
+        
+    # Remove control characters
+    text = ''.join(c for c in text if c.isprintable())
     
-    if interaction.user.id == interaction.guild.owner_id:
-        return True
+    # Trim whitespace
+    text = text.strip()
     
-    if interaction.user.guild_permissions.administrator:
-        return True
-    
-    if interaction.user.guild_permissions.manage_guild:
-        return True
-    
-    if interaction.user.guild_permissions.ban_members:
-        return True
-    
-    return False
+    return text
 
-# Pagination components
-class PaginationView(discord.ui.View):
-    """View for paginating through embeds"""
-    
-    def __init__(
-        self,
-        embeds: List[discord.Embed],
-        user_id: int,
-        timeout: int = 300
-    ):
-        """Initialize pagination view
-        
-        Args:
-            embeds: List of embeds to paginate
-            user_id: User ID of the initiator
-            timeout: Button timeout in seconds
-        """
-        super().__init__(timeout=timeout)
-        self.embeds = embeds
-        self.user_id = user_id
-        self.current_page = 0
-        self.total_pages = len(embeds)
-        
-        # Disable buttons if only one page
-        if self.total_pages == 1:
-            self.first_page_button.disabled = True
-            self.prev_page_button.disabled = True
-            self.next_page_button.disabled = True
-            self.last_page_button.disabled = True
-        
-        # Update button labels
-        self.page_indicator.label = f"Page {self.current_page + 1}/{self.total_pages}"
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if interaction is from the same user
-        
-        Args:
-            interaction: Discord interaction
-            
-        Returns:
-            bool: True if interaction is from the same user
-        """
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "These buttons are not for you!",
-                ephemeral=True
-            )
-            return False
-        return True
-    
-    @discord.ui.button(
-        emoji="⏮️",
-        style=discord.ButtonStyle.gray,
-        row=0
-    )
-    async def first_page_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """First page button callback
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.current_page = 0
-        self.page_indicator.label = f"Page {self.current_page + 1}/{self.total_pages}"
-        
-        # Disable/enable buttons
-        self.first_page_button.disabled = self.current_page == 0
-        self.prev_page_button.disabled = self.current_page == 0
-        self.next_page_button.disabled = self.current_page == self.total_pages - 1
-        self.last_page_button.disabled = self.current_page == self.total_pages - 1
-        
-        await interaction.response.edit_message(
-            embed=self.embeds[self.current_page],
-            view=self
-        )
-    
-    @discord.ui.button(
-        emoji="◀️",
-        style=discord.ButtonStyle.gray,
-        row=0
-    )
-    async def prev_page_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Previous page button callback
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.current_page = max(0, self.current_page - 1)
-        self.page_indicator.label = f"Page {self.current_page + 1}/{self.total_pages}"
-        
-        # Disable/enable buttons
-        self.first_page_button.disabled = self.current_page == 0
-        self.prev_page_button.disabled = self.current_page == 0
-        self.next_page_button.disabled = self.current_page == self.total_pages - 1
-        self.last_page_button.disabled = self.current_page == self.total_pages - 1
-        
-        await interaction.response.edit_message(
-            embed=self.embeds[self.current_page],
-            view=self
-        )
-    
-    @discord.ui.button(
-        label="Page 1/1",
-        style=discord.ButtonStyle.gray,
-        disabled=True,
-        row=0
-    )
-    async def page_indicator(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Page indicator button callback (disabled)
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        # This button doesn't do anything, it's just an indicator
-        pass
-    
-    @discord.ui.button(
-        emoji="▶️",
-        style=discord.ButtonStyle.gray,
-        row=0
-    )
-    async def next_page_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Next page button callback
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        self.page_indicator.label = f"Page {self.current_page + 1}/{self.total_pages}"
-        
-        # Disable/enable buttons
-        self.first_page_button.disabled = self.current_page == 0
-        self.prev_page_button.disabled = self.current_page == 0
-        self.next_page_button.disabled = self.current_page == self.total_pages - 1
-        self.last_page_button.disabled = self.current_page == self.total_pages - 1
-        
-        await interaction.response.edit_message(
-            embed=self.embeds[self.current_page],
-            view=self
-        )
-    
-    @discord.ui.button(
-        emoji="⏭️",
-        style=discord.ButtonStyle.gray,
-        row=0
-    )
-    async def last_page_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Last page button callback
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.current_page = self.total_pages - 1
-        self.page_indicator.label = f"Page {self.current_page + 1}/{self.total_pages}"
-        
-        # Disable/enable buttons
-        self.first_page_button.disabled = self.current_page == 0
-        self.prev_page_button.disabled = self.current_page == 0
-        self.next_page_button.disabled = self.current_page == self.total_pages - 1
-        self.last_page_button.disabled = self.current_page == self.total_pages - 1
-        
-        await interaction.response.edit_message(
-            embed=self.embeds[self.current_page],
-            view=self
-        )
-
-async def paginate_embeds(
-    interaction: discord.Interaction,
-    embeds: List[discord.Embed],
-    timeout: int = 300,
-    ephemeral: bool = False
-) -> None:
-    """Paginate a list of embeds
+def truncate_string(text: str, max_length: int = 100, ellipsis: bool = True) -> str:
+    """Truncate string to maximum length
     
     Args:
-        interaction: Discord interaction
-        embeds: List of embeds to paginate
-        timeout: Timeout for buttons in seconds
-        ephemeral: Whether to send as ephemeral message
+        text: Text to truncate
+        max_length: Maximum length (default: 100)
+        ellipsis: Add ellipsis if truncated (default: True)
+        
+    Returns:
+        str: Truncated string
     """
-    if not embeds:
-        return
-    
-    # Create pagination view
-    view = PaginationView(embeds, interaction.user.id, timeout)
-    
-    # Check if interaction has been responded to
-    if interaction.response.is_done():
-        # Send new message
-        await interaction.followup.send(
-            embed=embeds[0],
-            view=view,
-            ephemeral=ephemeral
-        )
+    if len(text) <= max_length:
+        return text
+        
+    if ellipsis:
+        return text[:max_length - 3] + "..."
     else:
-        # Respond to interaction
-        await interaction.response.send_message(
-            embed=embeds[0],
-            view=view,
-            ephemeral=ephemeral
-        )
+        return text[:max_length]
 
-# Confirmation dialog
-class ConfirmView(discord.ui.View):
-    """View for confirmation buttons"""
+def validate_steam_id(steam_id: str) -> bool:
+    """Validate Steam ID format
     
-    def __init__(
-        self,
-        user_id: int,
-        on_confirm: Optional[Callable] = None,
-        on_cancel: Optional[Callable] = None,
-        timeout: int = 60
-    ):
-        """Initialize confirmation view
+    Args:
+        steam_id: Steam ID
         
-        Args:
-            user_id: User ID of the initiator
-            on_confirm: Callback for confirmation
-            on_cancel: Callback for cancellation
-            timeout: Button timeout in seconds
-        """
-        super().__init__(timeout=timeout)
-        self.user_id = user_id
-        self.on_confirm = on_confirm
-        self.on_cancel = on_cancel
-        self.value = None
+    Returns:
+        bool: True if valid
+    """
+    # Check format (Steam64 ID)
+    return bool(re.match(r'^7656119\d{10}$', steam_id))
+
+def validate_discord_id(discord_id: str) -> bool:
+    """Validate Discord ID format
     
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if interaction is from the same user
+    Args:
+        discord_id: Discord ID
         
-        Args:
-            interaction: Discord interaction
-            
-        Returns:
-            bool: True if interaction is from the same user
-        """
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "These buttons are not for you!",
-                ephemeral=True
-            )
-            return False
-        return True
+    Returns:
+        bool: True if valid
+    """
+    # Check format
+    return bool(re.match(r'^\d{17,20}$', discord_id))
+
+def format_kd_ratio(kills: int, deaths: int) -> float:
+    """Calculate and format K/D ratio
     
-    @discord.ui.button(
-        label="Confirm",
-        style=discord.ButtonStyle.green,
-        row=0
-    )
-    async def confirm_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Confirm button callback
+    Args:
+        kills: Kill count
+        deaths: Death count
         
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.value = True
-        self.stop()
+    Returns:
+        float: K/D ratio
+    """
+    if deaths == 0:
+        return float(kills)
+    else:
+        return round(kills / deaths, 2)
+
+def get_level_for_kills(kills: int) -> int:
+    """Get player level based on kills
+    
+    Args:
+        kills: Kill count
         
-        if self.on_confirm:
-            await self.on_confirm(interaction)
+    Returns:
+        int: Level
+    """
+    # Level formula
+    level = 1
+    
+    if kills >= 10:
+        level = 2
+    if kills >= 25:
+        level = 3
+    if kills >= 50:
+        level = 4
+    if kills >= 100:
+        level = 5
+    if kills >= 200:
+        level = 6
+    if kills >= 350:
+        level = 7
+    if kills >= 500:
+        level = 8
+    if kills >= 750:
+        level = 9
+    if kills >= 1000:
+        level = 10
+    if kills >= 1500:
+        level = 11
+    if kills >= 2000:
+        level = 12
+    if kills >= 3000:
+        level = 13
+    if kills >= 4000:
+        level = 14
+    if kills >= 5000:
+        level = 15
+        
+    return level
+
+def format_large_number(num: int) -> str:
+    """Format large number with suffix
+    
+    Args:
+        num: Number to format
+        
+    Returns:
+        str: Formatted number
+    """
+    if num < 1000:
+        return str(num)
+    elif num < 1000000:
+        return f"{num / 1000:.1f}K".replace(".0K", "K")
+    else:
+        return f"{num / 1000000:.1f}M".replace(".0M", "M")
+
+def friendly_duration(seconds: int) -> str:
+    """Format seconds as friendly duration
+    
+    Args:
+        seconds: Seconds
+        
+    Returns:
+        str: Friendly duration
+    """
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if minutes == 0:
+            return f"{hours} hour{'s' if hours != 1 else ''}"
         else:
-            await interaction.response.defer()
-    
-    @discord.ui.button(
-        label="Cancel",
-        style=discord.ButtonStyle.red,
-        row=0
-    )
-    async def cancel_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        """Cancel button callback
-        
-        Args:
-            interaction: Discord interaction
-            button: Button that was pressed
-        """
-        self.value = False
-        self.stop()
-        
-        if self.on_cancel:
-            await self.on_cancel(interaction)
+            return f"{hours} hour{'s' if hours != 1 else ''} and {minutes} minute{'s' if minutes != 1 else ''}"
+    else:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        if hours == 0:
+            return f"{days} day{'s' if days != 1 else ''}"
         else:
-            await interaction.response.defer()
+            return f"{days} day{'s' if days != 1 else ''} and {hours} hour{'s' if hours != 1 else ''}"
 
-async def confirm(
-    interaction: discord.Interaction,
-    content: Optional[str] = None,
-    embed: Optional[discord.Embed] = None,
-    timeout: int = 60,
-    ephemeral: bool = False
-) -> bool:
-    """Show a confirmation dialog
+def dict_to_table(data: List[Dict[str, Any]], columns: List[str], headers: Optional[List[str]] = None) -> str:
+    """Convert list of dictionaries to ASCII table
     
     Args:
-        interaction: Discord interaction
-        content: Message content
-        embed: Message embed
-        timeout: Button timeout in seconds
-        ephemeral: Whether to show as ephemeral message
+        data: List of dictionaries
+        columns: Columns to include
+        headers: Custom headers (default: None)
         
     Returns:
-        bool: True if confirmed, False if cancelled or timed out
+        str: ASCII table
     """
-    view = ConfirmView(interaction.user.id, timeout=timeout)
+    if not data:
+        return "No data available"
+        
+    # Use column names as headers if not provided
+    if headers is None:
+        headers = columns
+        
+    # Calculate column widths
+    widths = [len(header) for header in headers]
+    for row in data:
+        for i, col in enumerate(columns):
+            if col in row:
+                width = len(str(row[col]))
+                widths[i] = max(widths[i], width)
+                
+    # Build header
+    header = " | ".join(f"{headers[i]:{widths[i]}}" for i in range(len(headers)))
+    separator = "-+-".join("-" * width for width in widths)
     
-    # Check if interaction has been responded to
-    if interaction.response.is_done():
-        # Send new message
-        message = await interaction.followup.send(
-            content=content,
-            embed=embed,
-            view=view,
-            ephemeral=ephemeral
+    # Build rows
+    rows = []
+    for row in data:
+        formatted_row = " | ".join(
+            f"{str(row.get(columns[i], '')):{widths[i]}}" for i in range(len(columns))
         )
-    else:
-        # Respond to interaction
-        await interaction.response.send_message(
-            content=content,
-            embed=embed,
-            view=view,
-            ephemeral=ephemeral
-        )
-        # Get the message
-        message = await interaction.original_response()
-    
-    # Wait for button press or timeout
-    await view.wait()
-    
-    # Clean up buttons if not timed out
-    if view.value is not None and not ephemeral:
-        await message.edit(view=None)
-    
-    return view.value or False
-
-# Select menus
-class BaseSelectMenu(discord.ui.Select):
-    """Base class for select menus"""
-    
-    def __init__(
-        self,
-        placeholder: str,
-        options: List[discord.SelectOption],
-        min_values: int = 1,
-        max_values: int = 1,
-        disabled: bool = False,
-        row: Optional[int] = None
-    ):
-        """Initialize select menu
+        rows.append(formatted_row)
         
-        Args:
-            placeholder: Placeholder text
-            options: Select options
-            min_values: Minimum number of values to select
-            max_values: Maximum number of values to select
-            disabled: Whether the select is disabled
-            row: Row to place the select in
-        """
-        super().__init__(
-            placeholder=placeholder,
-            options=options,
-            min_values=min_values,
-            max_values=max_values,
-            disabled=disabled,
-            row=row
-        )
-        
-    async def callback(self, interaction: discord.Interaction):
-        """Callback when an option is selected
-        
-        Args:
-            interaction: Discord interaction
-        """
-        view = self.view
-        view.selected_values = self.values
-        view.stop()
-
-class SelectView(discord.ui.View):
-    """View for select menus"""
-    
-    def __init__(
-        self,
-        user_id: int,
-        select_menu: BaseSelectMenu,
-        timeout: int = 60
-    ):
-        """Initialize select view
-        
-        Args:
-            user_id: User ID of the initiator
-            select_menu: Select menu to show
-            timeout: Button timeout in seconds
-        """
-        super().__init__(timeout=timeout)
-        self.user_id = user_id
-        self.selected_values = None
-        
-        # Add the select menu
-        self.add_item(select_menu)
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if interaction is from the same user
-        
-        Args:
-            interaction: Discord interaction
-            
-        Returns:
-            bool: True if interaction is from the same user
-        """
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "This select menu is not for you!",
-                ephemeral=True
-            )
-            return False
-        return True
-
-async def show_select_menu(
-    interaction: discord.Interaction,
-    placeholder: str,
-    options: List[discord.SelectOption],
-    content: Optional[str] = None,
-    embed: Optional[discord.Embed] = None,
-    min_values: int = 1,
-    max_values: int = 1,
-    timeout: int = 60,
-    ephemeral: bool = False
-) -> List[str]:
-    """Show a select menu and get selected values
-    
-    Args:
-        interaction: Discord interaction
-        placeholder: Placeholder text
-        options: Select options
-        content: Message content
-        embed: Message embed
-        min_values: Minimum number of values to select
-        max_values: Maximum number of values to select
-        timeout: Button timeout in seconds
-        ephemeral: Whether to show as ephemeral message
-        
-    Returns:
-        List[str]: Selected values, or empty list if cancelled or timed out
-    """
-    # Create select menu
-    select_menu = BaseSelectMenu(
-        placeholder=placeholder,
-        options=options,
-        min_values=min_values,
-        max_values=max_values
-    )
-    
-    # Create view
-    view = SelectView(interaction.user.id, select_menu, timeout=timeout)
-    
-    # Check if interaction has been responded to
-    if interaction.response.is_done():
-        # Send new message
-        message = await interaction.followup.send(
-            content=content,
-            embed=embed,
-            view=view,
-            ephemeral=ephemeral
-        )
-    else:
-        # Respond to interaction
-        await interaction.response.send_message(
-            content=content,
-            embed=embed,
-            view=view,
-            ephemeral=ephemeral
-        )
-        # Get the message
-        message = await interaction.original_response()
-    
-    # Wait for selection or timeout
-    await view.wait()
-    
-    # Clean up buttons if not timed out
-    if view.selected_values is not None and not ephemeral:
-        await message.edit(view=None)
-    
-    return view.selected_values or []
+    # Combine parts
+    return f"{header}\n{separator}\n" + "\n".join(rows)

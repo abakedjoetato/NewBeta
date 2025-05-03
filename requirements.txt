@@ -29,3 +29,6 @@ discord.py
 motor
 paramiko
 pymongo
+discord.py
+motor
+pymongo

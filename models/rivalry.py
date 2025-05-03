@@ -2,26 +2,32 @@
 Rivalry model for the Tower of Temptation PvP Statistics Discord Bot.
 
 This module provides:
-1. Rivalry class for tracking player-vs-player rivalries
-2. Methods for updating rivalry stats
-3. Methods for retrieving rivalry information
+1. Rivalry class for tracking player rivalries
+2. Methods for creating and retrieving rivalries
+3. Rivalry scoring and calculation
 """
-import asyncio
 import logging
-import math
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Set, Union, TypeVar, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Union, TypeVar, Tuple, cast
 
-from utils.database import get_db
+from utils.database import get_db, get_collection
 from utils.async_utils import AsyncCache
+
+from models.player import Player
 
 logger = logging.getLogger(__name__)
 
 # Type variables
 R = TypeVar('R', bound='Rivalry')
 
+# Constants
+MIN_KILLS_FOR_RIVALRY = 3  # Minimum kills to consider a rivalry
+RIVALRY_SCORE_MULTIPLIER = 1.5  # Multiplier for successive kills
+RIVALRY_DECAY_DAYS = 7  # Days before rivalry score starts decaying
+RIVALRY_DECAY_RATE = 0.1  # Daily decay rate for rivalries
+
 class Rivalry:
-    """Rivalry class for tracking player-vs-player rivalries"""
+    """Rivalry class for tracking player rivalries"""
     
     def __init__(self, data: Dict[str, Any]):
         """Initialize a rivalry
@@ -33,19 +39,16 @@ class Rivalry:
         self._id = data.get("_id")
         self.server_id = data.get("server_id")
         self.player1_id = data.get("player1_id")
-        self.player2_id = data.get("player2_id")
         self.player1_name = data.get("player1_name")
+        self.player2_id = data.get("player2_id")
         self.player2_name = data.get("player2_name")
         self.player1_kills = data.get("player1_kills", 0)
         self.player2_kills = data.get("player2_kills", 0)
-        self.total_kills = data.get("total_kills", 0)
+        self.rivalry_score = data.get("rivalry_score", 0)
         self.last_kill = data.get("last_kill")
-        self.last_weapon = data.get("last_weapon")
-        self.last_location = data.get("last_location")
         self.created_at = data.get("created_at")
         self.updated_at = data.get("updated_at")
-        self.is_active = data.get("is_active", True)
-        self.recent_kills = data.get("recent_kills", [])
+        self.kill_history = data.get("kill_history", [])
     
     @property
     def id(self) -> str:
@@ -57,90 +60,38 @@ class Rivalry:
         return str(self._id)
     
     @property
-    def score_difference(self) -> int:
-        """Get score difference
+    def total_kills(self) -> int:
+        """Get total kills in the rivalry
         
         Returns:
-            int: Score difference
+            int: Total kills
         """
-        return abs(self.player1_kills - self.player2_kills)
+        return self.player1_kills + self.player2_kills
     
     @property
-    def intensity_score(self) -> float:
-        """Get rivalry intensity score
-        
-        This is a measure of how competitive the rivalry is.
-        Higher scores indicate more intense rivalries.
-        
-        Formula: total_kills * (1 - abs(p1_kills - p2_kills) / total_kills)^2
+    def is_active(self) -> bool:
+        """Check if rivalry is active
         
         Returns:
-            float: Intensity score
+            bool: True if rivalry is active
         """
-        if self.total_kills <= 1:
-            return 0.0
-            
-        balance = 1.0 - (self.score_difference / self.total_kills)
-        return self.total_kills * (balance ** 2)
+        return self.total_kills >= MIN_KILLS_FOR_RIVALRY
     
-    def get_leader(self) -> Tuple[str, str]:
-        """Get rivalry leader
+    @property
+    def is_one_sided(self) -> bool:
+        """Check if rivalry is one-sided
         
         Returns:
-            Tuple[str, str]: Leader player ID and name
+            bool: True if rivalry is one-sided
         """
-        if self.player1_kills >= self.player2_kills:
-            return self.player1_id, self.player1_name
-        else:
-            return self.player2_id, self.player2_name
-    
-    def get_stats_for_player(self, player_id: str) -> Dict[str, Any]:
-        """Get rivalry stats from a player's perspective
-        
-        Args:
-            player_id: Player ID
+        # Requires at least 5 total kills and one player has > 80% of kills
+        if self.total_kills < 5:
+            return False
             
-        Returns:
-            Dict: Rivalry stats
-            
-        Raises:
-            ValueError: If player is not part of this rivalry
-        """
-        if player_id == self.player1_id:
-            # Player is player1
-            kills = self.player1_kills
-            deaths = self.player2_kills
-            opponent_id = self.player2_id
-            opponent_name = self.player2_name
-            is_leading = kills >= deaths
-        elif player_id == self.player2_id:
-            # Player is player2
-            kills = self.player2_kills
-            deaths = self.player1_kills
-            opponent_id = self.player1_id
-            opponent_name = self.player1_name
-            is_leading = kills >= deaths
-        else:
-            raise ValueError("Player is not part of this rivalry")
+        player1_percent = self.player1_kills / self.total_kills
+        player2_percent = self.player2_kills / self.total_kills
         
-        # Calculate K/D ratio
-        kd_ratio = kills / max(deaths, 1)
-        
-        return {
-            "player_id": player_id,
-            "opponent_id": opponent_id,
-            "opponent_name": opponent_name,
-            "kills": kills,
-            "deaths": deaths,
-            "total_kills": self.total_kills,
-            "kd_ratio": kd_ratio,
-            "is_leading": is_leading,
-            "score_difference": abs(kills - deaths),
-            "last_kill": self.last_kill,
-            "last_weapon": self.last_weapon,
-            "last_location": self.last_location,
-            "intensity_score": self.intensity_score
-        }
+        return player1_percent > 0.8 or player2_percent > 0.8
     
     @classmethod
     @AsyncCache.cached(ttl=60)
@@ -148,7 +99,7 @@ class Rivalry:
         """Get rivalry by ID
         
         Args:
-            rivalry_id: Rivalry ID
+            rivalry_id: Rivalry document ID
             
         Returns:
             Rivalry or None: Rivalry if found
@@ -169,7 +120,7 @@ class Rivalry:
         player1_id: str,
         player2_id: str
     ) -> Optional['Rivalry']:
-        """Get rivalry by players
+        """Get rivalry between two players
         
         Args:
             server_id: Server ID
@@ -184,17 +135,16 @@ class Rivalry:
         # Try both player orders
         rivalry_data = await db.collections["rivalries"].find_one({
             "server_id": server_id,
-            "$or": [
-                {
-                    "player1_id": player1_id,
-                    "player2_id": player2_id
-                },
-                {
-                    "player1_id": player2_id,
-                    "player2_id": player1_id
-                }
-            ]
+            "player1_id": player1_id,
+            "player2_id": player2_id
         })
+        
+        if not rivalry_data:
+            rivalry_data = await db.collections["rivalries"].find_one({
+                "server_id": server_id,
+                "player1_id": player2_id,
+                "player2_id": player1_id
+            })
         
         if not rivalry_data:
             return None
@@ -202,9 +152,8 @@ class Rivalry:
         return cls(rivalry_data)
     
     @classmethod
-    @AsyncCache.cached(ttl=60)
-    async def get_for_player(cls, server_id: str, player_id: str) -> List['Rivalry']:
-        """Get rivalries for a player
+    async def get_by_player(cls, server_id: str, player_id: str) -> List['Rivalry']:
+        """Get all rivalries for a player
         
         Args:
             server_id: Server ID
@@ -215,102 +164,82 @@ class Rivalry:
         """
         db = await get_db()
         
-        # Get rivalries where player is involved
-        cursor = db.collections["rivalries"].find({
+        # Get rivalries where player is either player1 or player2
+        cursor1 = db.collections["rivalries"].find({
             "server_id": server_id,
-            "$or": [
-                {"player1_id": player_id},
-                {"player2_id": player_id}
-            ]
-        }).sort("total_kills", -1)
+            "player1_id": player_id
+        })
         
-        rivalry_data = await cursor.to_list(length=None)
-        return [cls(data) for data in rivalry_data]
+        cursor2 = db.collections["rivalries"].find({
+            "server_id": server_id,
+            "player2_id": player_id
+        })
+        
+        # Combine results
+        rivalries_data = await cursor1.to_list(length=None)
+        rivalries_data.extend(await cursor2.to_list(length=None))
+        
+        # Convert to rivalry objects
+        return [cls(rivalry_data) for rivalry_data in rivalries_data]
     
     @classmethod
-    @AsyncCache.cached(ttl=30)
-    async def get_top_rivalries(cls, server_id: str, limit: int = 10) -> List['Rivalry']:
-        """Get top rivalries by total kills
+    async def get_top_rivalries(
+        cls,
+        server_id: str,
+        limit: int = 10
+    ) -> List['Rivalry']:
+        """Get top rivalries by score
         
         Args:
             server_id: Server ID
-            limit: Maximum number of rivalries to return
+            limit: Maximum number of rivalries to return (default: 10)
             
         Returns:
             List[Rivalry]: List of top rivalries
         """
         db = await get_db()
         
-        # Get rivalries with minimum kill threshold
-        cursor = db.collections["rivalries"].find({
+        rivalries_data = await db.collections["rivalries"].find({
             "server_id": server_id,
-            "total_kills": {"$gt": 1}
-        }).sort("total_kills", -1).limit(limit)
+            "rivalry_score": {"$gt": 0}
+        }).sort("rivalry_score", -1).limit(limit).to_list(length=limit)
         
-        rivalry_data = await cursor.to_list(length=None)
-        return [cls(data) for data in rivalry_data]
+        return [cls(rivalry_data) for rivalry_data in rivalries_data]
     
     @classmethod
-    @AsyncCache.cached(ttl=30)
-    async def get_closest_rivalries(cls, server_id: str, limit: int = 10) -> List['Rivalry']:
-        """Get closest rivalries by score difference
-        
-        Args:
-            server_id: Server ID
-            limit: Maximum number of rivalries to return
-            
-        Returns:
-            List[Rivalry]: List of closest rivalries
-        """
-        db = await get_db()
-        pipeline = [
-            {"$match": {
-                "server_id": server_id,
-                "total_kills": {"$gt": 3}  # Require at least 4 kills
-            }},
-            {"$addFields": {
-                "score_difference": {"$abs": {"$subtract": ["$player1_kills", "$player2_kills"]}},
-            }},
-            {"$sort": {"score_difference": 1, "total_kills": -1}},
-            {"$limit": limit}
-        ]
-        
-        cursor = db.collections["rivalries"].aggregate(pipeline)
-        rivalry_data = await cursor.to_list(length=None)
-        
-        return [cls(data) for data in rivalry_data]
-    
-    @classmethod
-    @AsyncCache.cached(ttl=30)
-    async def get_recent_rivalries(
+    async def get_most_one_sided(
         cls,
         server_id: str,
-        limit: int = 10,
-        days: int = 7
+        limit: int = 10
     ) -> List['Rivalry']:
-        """Get recently active rivalries
+        """Get most one-sided rivalries
         
         Args:
             server_id: Server ID
-            limit: Maximum number of rivalries to return
-            days: Number of days to look back
+            limit: Maximum number of rivalries to return (default: 10)
             
         Returns:
-            List[Rivalry]: List of recent rivalries
+            List[Rivalry]: List of most one-sided rivalries
         """
         db = await get_db()
         
-        # Calculate date threshold
-        threshold = datetime.utcnow() - timedelta(days=days)
-        
-        # Get rivalries with recent activity
-        cursor = db.collections["rivalries"].find({
+        # Get rivalries with at least 5 total kills
+        rivalries_data = await db.collections["rivalries"].find({
             "server_id": server_id,
-            "last_kill": {"$gte": threshold}
-        }).sort("last_kill", -1).limit(limit)
+            "$expr": {"$gte": [{"$add": ["$player1_kills", "$player2_kills"]}, 5]}
+        }).to_list(length=None)
         
-        rivalry_data = await cursor.to_list(length=None)
-        return [cls(data) for data in rivalry_data]
+        # Calculate one-sidedness for each rivalry
+        rivalries = []
+        for data in rivalries_data:
+            rivalry = cls(data)
+            if rivalry.is_one_sided:
+                rivalries.append(rivalry)
+        
+        # Sort by difference between player kills
+        rivalries.sort(key=lambda r: abs(r.player1_kills - r.player2_kills), reverse=True)
+        
+        return rivalries[:limit]
     
     @classmethod
     async def record_kill(
@@ -320,71 +249,184 @@ class Rivalry:
         killer_name: str,
         victim_id: str,
         victim_name: str,
-        weapon: Optional[str] = None,
-        location: Optional[str] = None
+        weapon: str = None,
+        location: str = None
     ) -> 'Rivalry':
-        """Record a kill and update rivalry
+        """Record a kill and update the rivalry
         
         Args:
             server_id: Server ID
-            killer_id: Killer player ID
-            killer_name: Killer player name
-            victim_id: Victim player ID
-            victim_name: Victim player name
-            weapon: Weapon used (optional)
-            location: Kill location (optional)
+            killer_id: Killer ID
+            killer_name: Killer name
+            victim_id: Victim ID
+            victim_name: Victim name
+            weapon: Weapon used (default: None)
+            location: Location (default: None)
             
         Returns:
             Rivalry: Updated rivalry
         """
-        # Check if rivalry exists
+        # Don't create rivalry for self-kills
+        if killer_id == victim_id:
+            logger.debug(f"Ignoring self-kill: {killer_name} ({killer_id})")
+            return None
+            
+        # Get or create Player objects
+        killer = await Player.create_or_update(server_id, killer_id, killer_name)
+        victim = await Player.create_or_update(server_id, victim_id, victim_name)
+        
+        # Record kill and death for players
+        await killer.record_kill(victim_id, victim_name, weapon)
+        await victim.record_death(killer_id, killer_name, weapon)
+        
+        # Get current time
+        now = datetime.utcnow()
+        
+        # Get existing rivalry or create new one
         rivalry = await cls.get_by_players(server_id, killer_id, victim_id)
         
-        now = datetime.utcnow()
-        db = await get_db()
-        
-        # Create or update rivalry
-        if not rivalry:
+        if rivalry:
+            # Update existing rivalry
+            db = await get_db()
+            
+            # Determine which player is the killer
+            if killer_id == rivalry.player1_id:
+                player1_kills = rivalry.player1_kills + 1
+                player2_kills = rivalry.player2_kills
+                last_killer = 1
+            else:
+                player1_kills = rivalry.player1_kills
+                player2_kills = rivalry.player2_kills + 1
+                last_killer = 2
+                
+            # Calculate new rivalry score
+            kill_history = rivalry.kill_history + [last_killer]
+            rivalry_score = cls._calculate_rivalry_score(kill_history)
+            
+            # Prepare kill event data
+            kill_event = {
+                "killer_id": killer_id,
+                "killer_name": killer_name,
+                "victim_id": victim_id,
+                "victim_name": victim_name,
+                "weapon": weapon,
+                "location": location,
+                "timestamp": now
+            }
+            
+            # Update rivalry data
+            update_data = {
+                "player1_kills": player1_kills,
+                "player2_kills": player2_kills,
+                "rivalry_score": rivalry_score,
+                "last_kill": kill_event,
+                "updated_at": now,
+                "kill_history": kill_history[-20:]  # Keep last 20 kills
+            }
+            
+            result = await db.collections["rivalries"].update_one(
+                {"_id": rivalry._id},
+                {"$set": update_data}
+            )
+            
+            # Update local data
+            rivalry.player1_kills = player1_kills
+            rivalry.player2_kills = player2_kills
+            rivalry.rivalry_score = rivalry_score
+            rivalry.last_kill = kill_event
+            rivalry.updated_at = now
+            rivalry.kill_history = kill_history[-20:]
+            
+            # Clear cache
+            AsyncCache.invalidate(cls.get_by_id, rivalry.id)
+            AsyncCache.invalidate(cls.get_by_players, server_id, rivalry.player1_id, rivalry.player2_id)
+            
+            # Store kill event
+            await cls._store_kill_event(server_id, killer_id, killer_name, victim_id, victim_name, weapon, location)
+            
+            return rivalry
+            
+        else:
             # Create new rivalry
+            db = await get_db()
+            
+            # Ensure consistent order (smaller ID first)
+            if killer_id < victim_id:
+                player1_id = killer_id
+                player1_name = killer_name
+                player2_id = victim_id
+                player2_name = victim_name
+                player1_kills = 1
+                player2_kills = 0
+                kill_history = [1]  # 1 represents player1 killed player2
+            else:
+                player1_id = victim_id
+                player1_name = victim_name
+                player2_id = killer_id
+                player2_name = killer_name
+                player1_kills = 0
+                player2_kills = 1
+                kill_history = [2]  # 2 represents player2 killed player1
+            
+            # Prepare kill event data
+            kill_event = {
+                "killer_id": killer_id,
+                "killer_name": killer_name,
+                "victim_id": victim_id,
+                "victim_name": victim_name,
+                "weapon": weapon,
+                "location": location,
+                "timestamp": now
+            }
+            
+            # Create rivalry document
             rivalry_data = {
                 "server_id": server_id,
-                "player1_id": killer_id,
-                "player2_id": victim_id,
-                "player1_name": killer_name,
-                "player2_name": victim_name,
-                "player1_kills": 1,
-                "player2_kills": 0,
-                "total_kills": 1,
-                "last_kill": now,
-                "last_weapon": weapon,
-                "last_location": location,
+                "player1_id": player1_id,
+                "player1_name": player1_name,
+                "player2_id": player2_id,
+                "player2_name": player2_name,
+                "player1_kills": player1_kills,
+                "player2_kills": player2_kills,
+                "rivalry_score": 1,  # Initial score
+                "last_kill": kill_event,
+                "kill_history": kill_history,
                 "created_at": now,
-                "updated_at": now,
-                "is_active": True,
-                "recent_kills": [{
-                    "killer_id": killer_id,
-                    "killer_name": killer_name,
-                    "victim_id": victim_id,
-                    "victim_name": victim_name,
-                    "weapon": weapon,
-                    "location": location,
-                    "timestamp": now
-                }]
+                "updated_at": now
             }
             
             result = await db.collections["rivalries"].insert_one(rivalry_data)
             rivalry_data["_id"] = result.inserted_id
             
-            # Invalidate caches
-            AsyncCache.invalidate_all(cls.get_for_player)
-            AsyncCache.invalidate_all(cls.get_top_rivalries)
-            AsyncCache.invalidate_all(cls.get_closest_rivalries)
-            AsyncCache.invalidate_all(cls.get_recent_rivalries)
+            # Store kill event
+            await cls._store_kill_event(server_id, killer_id, killer_name, victim_id, victim_name, weapon, location)
             
             return cls(rivalry_data)
+    
+    @classmethod
+    async def _store_kill_event(cls, server_id: str, killer_id: str, killer_name: str,
+                               victim_id: str, victim_name: str, weapon: str = None,
+                               location: str = None) -> bool:
+        """Store a kill event in the database
         
-        # Prepare update
-        kill_data = {
+        Args:
+            server_id: Server ID
+            killer_id: Killer ID
+            killer_name: Killer name
+            victim_id: Victim ID
+            victim_name: Victim name
+            weapon: Weapon used (default: None)
+            location: Location (default: None)
+            
+        Returns:
+            bool: True if successful
+        """
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Create kill event document
+        kill_event = {
+            "server_id": server_id,
             "killer_id": killer_id,
             "killer_name": killer_name,
             "victim_id": victim_id,
@@ -394,87 +436,97 @@ class Rivalry:
             "timestamp": now
         }
         
-        update_query = {
-            "$set": {
-                "last_kill": now,
-                "last_weapon": weapon,
-                "last_location": location,
-                "updated_at": now,
-                "is_active": True
-            },
-            "$inc": {"total_kills": 1},
-            "$push": {
-                "recent_kills": {
-                    "$each": [kill_data],
-                    "$slice": -10  # Keep only the 10 most recent kills
-                }
-            }
-        }
-        
-        # Increment the appropriate kill counter
-        if killer_id == rivalry.player1_id:
-            update_query["$inc"]["player1_kills"] = 1
-        else:
-            update_query["$inc"]["player2_kills"] = 1
-        
-        # Update rivalry
-        result = await db.collections["rivalries"].find_one_and_update(
-            {"_id": rivalry._id},
-            update_query,
-            return_document=True
-        )
-        
-        # Invalidate caches
-        AsyncCache.invalidate(cls.get_by_id, rivalry.id)
-        AsyncCache.invalidate(cls.get_by_players, server_id, killer_id, victim_id)
-        AsyncCache.invalidate_all(cls.get_for_player)
-        AsyncCache.invalidate_all(cls.get_top_rivalries)
-        AsyncCache.invalidate_all(cls.get_closest_rivalries)
-        AsyncCache.invalidate_all(cls.get_recent_rivalries)
-        
-        return cls(result)
+        try:
+            result = await db.collections["kill_events"].insert_one(kill_event)
+            return result.acknowledged
+        except Exception as e:
+            logger.error(f"Error storing kill event: {str(e)}")
+            return False
     
-    async def update(self, update_data: Dict[str, Any]) -> 'Rivalry':
-        """Update rivalry data
+    @classmethod
+    def _calculate_rivalry_score(cls, kill_history: List[int]) -> float:
+        """Calculate rivalry score from kill history
         
         Args:
-            update_data: Data to update
+            kill_history: List of kill history (1 = player1, 2 = player2)
             
         Returns:
-            Rivalry: Updated rivalry
+            float: Rivalry score
         """
-        # Update rivalry
-        db = await get_db()
-        update_data["updated_at"] = datetime.utcnow()
+        if not kill_history:
+            return 0
+            
+        score = 0
+        streak = 0
+        last_killer = 0
         
-        result = await db.collections["rivalries"].find_one_and_update(
-            {"_id": self._id},
-            {"$set": update_data},
-            return_document=True
-        )
+        for killer in kill_history:
+            if killer == last_killer:
+                # Continuing streak
+                streak += 1
+                # Apply multiplier for successive kills
+                score += 1 * (RIVALRY_SCORE_MULTIPLIER ** min(streak, 3))
+            else:
+                # New killer, reset streak
+                streak = 0
+                score += 1
+                
+            last_killer = killer
+            
+        # Bonus for balanced rivalries
+        player1_kills = kill_history.count(1)
+        player2_kills = kill_history.count(2)
+        total_kills = player1_kills + player2_kills
         
-        # Invalidate caches
-        AsyncCache.invalidate(self.__class__.get_by_id, self.id)
-        AsyncCache.invalidate(self.__class__.get_by_players, self.server_id, self.player1_id, self.player2_id)
-        AsyncCache.invalidate_all(self.__class__.get_for_player)
-        AsyncCache.invalidate_all(self.__class__.get_top_rivalries)
-        AsyncCache.invalidate_all(self.__class__.get_closest_rivalries)
-        AsyncCache.invalidate_all(self.__class__.get_recent_rivalries)
-        
-        # Update local state
-        self.data = result
-        for key, value in update_data.items():
-            setattr(self, key, value)
-        
-        return self
+        if total_kills >= 6:
+            min_kills = min(player1_kills, player2_kills)
+            max_kills = max(player1_kills, player2_kills)
+            
+            # If at least 25% of kills are from underdog
+            if min_kills / total_kills >= 0.25:
+                score *= 1.2
+                
+        return round(score, 1)
     
-    async def deactivate(self) -> bool:
-        """Deactivate rivalry
+    async def update_player_names(self) -> bool:
+        """Update player names from latest data
         
         Returns:
-            bool: True if successfully deactivated
+            bool: True if successful
         """
-        return await self.update({"is_active": False})
+        db = await get_db()
+        now = datetime.utcnow()
+        
+        # Get latest player data
+        player1 = await Player.get_by_player_id(self.server_id, self.player1_id)
+        player2 = await Player.get_by_player_id(self.server_id, self.player2_id)
+        
+        if player1 and player2:
+            # Update if names have changed
+            if player1.player_name != self.player1_name or player2.player_name != self.player2_name:
+                update_data = {
+                    "player1_name": player1.player_name,
+                    "player2_name": player2.player_name,
+                    "updated_at": now
+                }
+                
+                result = await db.collections["rivalries"].update_one(
+                    {"_id": self._id},
+                    {"$set": update_data}
+                )
+                
+                # Update local data
+                self.player1_name = player1.player_name
+                self.player2_name = player2.player_name
+                self.updated_at = now
+                
+                # Clear cache
+                AsyncCache.invalidate(self.__class__.get_by_id, self.id)
+                AsyncCache.invalidate(self.__class__.get_by_players, self.server_id, self.player1_id, self.player2_id)
+                
+                return result.acknowledged
+                
+        return False
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert rivalry to dictionary
@@ -486,18 +538,16 @@ class Rivalry:
             "id": self.id,
             "server_id": self.server_id,
             "player1_id": self.player1_id,
-            "player2_id": self.player2_id,
             "player1_name": self.player1_name,
+            "player2_id": self.player2_id,
             "player2_name": self.player2_name,
             "player1_kills": self.player1_kills,
             "player2_kills": self.player2_kills,
             "total_kills": self.total_kills,
-            "score_difference": self.score_difference,
-            "intensity_score": self.intensity_score,
-            "last_kill": self.last_kill.isoformat() if self.last_kill else None,
-            "last_weapon": self.last_weapon,
-            "last_location": self.last_location,
+            "rivalry_score": self.rivalry_score,
+            "is_active": self.is_active,
+            "is_one_sided": self.is_one_sided,
+            "last_kill": self.last_kill,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "is_active": self.is_active
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
