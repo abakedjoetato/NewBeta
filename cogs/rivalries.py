@@ -1,584 +1,675 @@
 """
-Rivalries cog for the Tower of Temptation PvP Statistics Discord Bot.
+Rivalries cog for Tower of Temptation PvP Statistics Discord Bot.
 
-This module provides commands for viewing and managing player rivalries.
+This cog provides commands for tracking and managing player rivalries, including:
+1. Viewing individual player rivalries
+2. Displaying top rivalries on a server
+3. Showing closest and most intense rivalries
+4. Managing rivalries and viewing recent activity
 """
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Union, Literal
 
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
 from models.rivalry import Rivalry
 from models.player_link import PlayerLink
-from utils.database import get_db
-from utils.async_utils import BackgroundTask
-from utils.helpers import has_admin_permission, paginate_embeds
 from utils.embed_builder import EmbedBuilder
+from utils.helpers import paginate_embeds, has_admin_permission, has_mod_permission, confirm
+from utils.async_utils import BackgroundTask
 
 logger = logging.getLogger(__name__)
 
-class Rivalries(commands.Cog):
-    """Commands for viewing and tracking player rivalries"""
+class RivalriesCog(commands.Cog):
+    """Commands for managing rivalries in Tower of Temptation"""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.ctx_menu = app_commands.ContextMenu(
+            name="View Rivalries",
+            callback=self.context_view_rivalries,
+        )
+        self.bot.tree.add_command(self.ctx_menu)
     
-    @app_commands.command(
-        name="rivalries",
-        description="View player rivalries and rivalry statistics"
-    )
-    @app_commands.describe(
-        subcommand="Rivalry action to perform",
-        player_name="Player name to check rivalries for",
-        server_id="Server ID (optional - uses default if not provided)",
-        limit="Number of rivalries to show (1-25, default 10)",
-        days="Number of days to look back for recent rivalries (default 7)"
-    )
-    @app_commands.choices(subcommand=[
-        app_commands.Choice(name="list", value="list"),
-        app_commands.Choice(name="player", value="player"),
-        app_commands.Choice(name="top", value="top"),
-        app_commands.Choice(name="closest", value="closest"),
-        app_commands.Choice(name="recent", value="recent")
-    ])
-    async def rivalries_command(
-        self,
-        interaction: discord.Interaction,
-        subcommand: str,
-        player_name: Optional[str] = None,
-        server_id: Optional[str] = None,
-        limit: Optional[int] = 10,
-        days: Optional[int] = 7
-    ):
-        """Rivalries command
+    async def cog_unload(self) -> None:
+        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+    
+    async def get_player_id_for_server(self, interaction: discord.Interaction, server_id: str) -> Optional[str]:
+        """Get player ID for a server based on Discord ID
         
         Args:
             interaction: Discord interaction
-            subcommand: Rivalries action to perform
-            player_name: Player name to check rivalries for (optional)
-            server_id: Server ID (optional)
-            limit: Number of rivalries to show (optional)
-            days: Number of days to look back for recent rivalries (optional)
+            server_id: Server ID
+            
+        Returns:
+            str or None: Player ID if found
         """
-        # Validate limit
-        if limit < 1:
-            limit = 1
-        elif limit > 25:
-            limit = 25
+        # Check if user has a player link
+        player_link = await PlayerLink.get_by_discord_id(interaction.user.id)
+        if not player_link:
+            # No player link found, inform user
+            embed = EmbedBuilder.warning(
+                title="No Linked Player",
+                description="You don't have any linked players. Use `/link player` to link your Discord account to an in-game player."
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return None
         
-        # Validate days
-        if days < 1:
-            days = 1
-        elif days > 90:
-            days = 90
+        # Check if user has a player on this server
+        player_id = player_link.get_player_id_for_server(server_id)
+        if not player_id:
+            # No player on this server, inform user
+            embed = EmbedBuilder.warning(
+                title="No Player on Server",
+                description=f"You don't have a linked player on the selected server. Use `/link player` to link your Discord account to an in-game player."
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return None
         
-        # Set up default server_id if not provided
-        if not server_id:
-            db = await get_db()
-            guild_config = await db.get_guild_config(interaction.guild_id)
-            
-            if not guild_config or not guild_config.get("default_server"):
-                await interaction.response.send_message(
-                    "No server has been set up for this Discord guild. Please use the server_id parameter or ask an admin to set a default server.",
-                    ephemeral=True
-                )
-                return
-            
-            server_id = guild_config.get("default_server")
-        
-        # Commands that require player_name
-        if subcommand == "player" and not player_name:
-            # If player name not provided, try to use linked player
-            player_link = await PlayerLink.get_by_discord_id(interaction.user.id)
-            
-            if not player_link or not player_link.get_player_id_for_server(server_id):
-                await interaction.response.send_message(
-                    "Player name is required for this command, or you must have a linked character on this server.",
-                    ephemeral=True
-                )
-                return
-            
-            # Get player name from link
-            db = await get_db()
-            player_id = player_link.get_player_id_for_server(server_id)
-            player = await db.collections["players"].find_one({"_id": player_id})
-            
-            if not player:
-                await interaction.response.send_message(
-                    "Could not find your linked character on this server.",
-                    ephemeral=True
-                )
-                return
-            
-            player_name = player.get("name")
-        
-        # Process based on subcommand
-        if subcommand == "list":
-            await self._rivalries_list(interaction, server_id, limit)
-        elif subcommand == "player":
-            await self._rivalries_player(interaction, server_id, player_name)
-        elif subcommand == "top":
-            await self._rivalries_top(interaction, server_id, limit)
-        elif subcommand == "closest":
-            await self._rivalries_closest(interaction, server_id, limit)
-        elif subcommand == "recent":
-            await self._rivalries_recent(interaction, server_id, limit, days)
+        return player_id
     
+    async def context_view_rivalries(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        """Context menu command to view a user's rivalries
+        
+        Args:
+            interaction: Discord interaction
+            member: Discord member
+        """
+        await interaction.response.defer(ephemeral=True)
+        
+        # Get server ID from guild config
+        # For now, hardcode a test server ID
+        server_id = "test_server"
+        
+        # Get user's player link
+        player_link = await PlayerLink.get_by_discord_id(member.id)
+        if not player_link:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"{member.display_name} doesn't have any linked players or rivalries."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Get player ID for server
+        player_id = player_link.get_player_id_for_server(server_id)
+        if not player_id:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"{member.display_name} doesn't have a linked player on this server."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Get player's rivalries
+        rivalries = await Rivalry.get_for_player(server_id, player_id)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"{member.display_name} doesn't have any rivalries yet."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            stats = rivalry.get_stats_for_player(player_id)
+            
+            # Get information from stats
+            opponent_name = stats.get("opponent_name", "Unknown")
+            kills = stats.get("kills", 0)
+            deaths = stats.get("deaths", 0)
+            kd_ratio = stats.get("kd_ratio", 0)
+            intensity = stats.get("intensity_score", 0)
+            is_leading = stats.get("is_leading", False)
+            
+            # Create rivalry embed
+            embed = EmbedBuilder.rivalry(
+                player1_name=member.display_name,
+                player2_name=opponent_name,
+                player1_kills=kills,
+                player2_kills=deaths,
+                total_kills=rivalry.total_kills,
+                last_kill=rivalry.last_kill,
+                last_weapon=rivalry.last_weapon,
+                last_location=rivalry.last_location
+            )
+            
+            embeds.append(embed)
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0], ephemeral=True)
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds, ephemeral=True)
+    
+    # Group command for rivalries
+    rivalry_group = app_commands.Group(name="rivalry", description="View and manage rivalries")
+    
+    @rivalry_group.command(name="list")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        limit="Maximum number of rivalries to show (default: 10)"
+    )
     async def _rivalries_list(
         self,
         interaction: discord.Interaction,
-        server_id: str,
-        limit: int = 10
-    ):
-        """List all rivalries on a server
+        server_id: Optional[str] = None,
+        limit: Optional[int] = 10
+    ) -> None:
+        """List your rivalries
         
         Args:
             interaction: Discord interaction
-            server_id: Server ID
-            limit: Maximum number of rivalries to show
+            server_id: Server ID (optional)
+            limit: Maximum number of rivalries to show (default: 10)
         """
-        # Defer response for potentially long DB operations
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer()
         
-        try:
-            db = await get_db()
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # Get player ID for server
+        player_id = await self.get_player_id_for_server(interaction, server_id)
+        if not player_id:
+            return
+        
+        # Get player's rivalries
+        rivalries = await Rivalry.get_for_player(server_id, player_id)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description="You don't have any rivalries yet. Play more and engage with other players!"
+            )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Limit number of rivalries
+        rivalries = rivalries[:limit]
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            stats = rivalry.get_stats_for_player(player_id)
             
-            # Get server info
-            server = await db.get_server_by_id(server_id)
-            server_name = server['name'] if server else f"Server {server_id}"
+            # Get information from stats
+            opponent_name = stats.get("opponent_name", "Unknown")
+            kills = stats.get("kills", 0)
+            deaths = stats.get("deaths", 0)
+            kd_ratio = stats.get("kd_ratio", 0)
+            intensity = stats.get("intensity_score", 0)
+            is_leading = stats.get("is_leading", False)
             
-            # Query all rivalries
-            cursor = db.collections["rivalries"].find({"server_id": server_id})
-            cursor = cursor.sort("total_kills", -1).limit(limit)
-            
-            rivalries = await cursor.to_list(length=None)
-            
-            if not rivalries:
-                await interaction.followup.send(
-                    f"No rivalries found on server **{server_name}**.",
-                    ephemeral=False
-                )
-                return
-            
-            # Create embeds
-            embeds = []
-            current_embed = EmbedBuilder.create_base_embed(
-                title=f"Rivalries on {server_name}",
-                description=f"Showing {len(rivalries)} rivalries sorted by total kills:",
-                guild=interaction.guild
+            # Create rivalry embed
+            embed = EmbedBuilder.rivalry(
+                player1_name=interaction.user.display_name,
+                player2_name=opponent_name,
+                player1_kills=kills,
+                player2_kills=deaths,
+                total_kills=rivalry.total_kills,
+                last_kill=rivalry.last_kill,
+                last_weapon=rivalry.last_weapon,
+                last_location=rivalry.last_location
             )
             
-            field_count = 0
-            for i, rivalry in enumerate(rivalries):
-                player1_name = rivalry.get("player1_name", "Unknown")
-                player2_name = rivalry.get("player2_name", "Unknown")
-                player1_kills = rivalry.get("player1_kills", 0)
-                player2_kills = rivalry.get("player2_kills", 0)
-                total_kills = rivalry.get("total_kills", 0)
-                
-                # Determine who's leading
-                if player1_kills > player2_kills:
-                    title = f"{player1_name} vs {player2_name}"
-                    value = f"{player1_kills} - {player2_kills} ({total_kills} total)"
-                elif player2_kills > player1_kills:
-                    title = f"{player2_name} vs {player1_name}"
-                    value = f"{player2_kills} - {player1_kills} ({total_kills} total)"
-                else:
-                    title = f"{player1_name} vs {player2_name}"
-                    value = f"TIED {player1_kills} - {player2_kills} ({total_kills} total)"
-                
-                # Add last kill info if available
-                last_kill = rivalry.get("last_kill")
-                if last_kill:
-                    timestamp = last_kill.timestamp() if isinstance(last_kill, datetime) else last_kill
-                    value += f"\nLast kill: <t:{int(timestamp)}:R>"
-                
-                # Add field to current embed
-                current_embed.add_field(
-                    name=f"{i+1}. {title}",
-                    value=value,
-                    inline=False
-                )
-                field_count += 1
-                
-                # Create new embed if we hit the field limit
-                if field_count >= 8:
-                    embeds.append(current_embed)
-                    current_embed = EmbedBuilder.create_base_embed(
-                        title=f"Rivalries on {server_name} (continued)",
-                        description=f"Showing {len(rivalries)} rivalries sorted by total kills:",
-                        guild=interaction.guild
-                    )
-                    field_count = 0
-            
-            # Add final embed if it has fields
-            if field_count > 0:
-                embeds.append(current_embed)
-            
-            # Send paginated embeds if needed
-            if len(embeds) > 1:
-                await paginate_embeds(interaction, embeds)
-            else:
-                await interaction.followup.send(embed=embeds[0])
-            
-        except Exception as e:
-            logger.error(f"Error listing rivalries: {e}")
-            await interaction.followup.send(
-                "An error occurred while listing rivalries. Please try again later.",
-                ephemeral=True
-            )
+            embeds.append(embed)
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0])
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds)
     
+    @rivalry_group.command(name="player")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        player_name="The player name to view rivalries for"
+    )
     async def _rivalries_player(
         self,
         interaction: discord.Interaction,
-        server_id: str,
+        server_id: Optional[str] = None,
         player_name: str
-    ):
-        """Show rivalries for a specific player
+    ) -> None:
+        """View rivalries for a specific player
         
         Args:
             interaction: Discord interaction
-            server_id: Server ID
-            player_name: Player name to check rivalries for
+            server_id: Server ID (optional)
+            player_name: Player name
         """
-        # Defer response for potentially long DB operations
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer()
         
-        try:
-            db = await get_db()
-            
-            # Get server info
-            server = await db.get_server_by_id(server_id)
-            server_name = server['name'] if server else f"Server {server_id}"
-            
-            # Get player info
-            player = await db.collections["players"].find_one({
-                "server_id": server_id,
-                "name": player_name
-            })
-            
-            if not player:
-                await interaction.followup.send(
-                    f"Player **{player_name}** not found on server **{server_name}**.",
-                    ephemeral=True
-                )
-                return
-            
-            player_id = str(player["_id"])
-            
-            # Get rivalries involving this player
-            rivalries = await Rivalry.get_for_player(server_id, player_id)
-            
-            if not rivalries:
-                await interaction.followup.send(
-                    f"No rivalries found for player **{player_name}** on server **{server_name}**.",
-                    ephemeral=False
-                )
-                return
-            
-            # Create embed
-            embed = EmbedBuilder.create_base_embed(
-                title=f"Rivalries for {player_name}",
-                description=f"Showing {len(rivalries)} rivalries on server **{server_name}**:",
-                guild=interaction.guild
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # TODO: In a real implementation, we would verify the player name
+        # For now, we'll just assume player_name is valid and is the player ID
+        player_id = player_name
+        
+        # Get player's rivalries
+        rivalries = await Rivalry.get_for_player(server_id, player_id)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"Player `{player_name}` doesn't have any rivalries yet."
             )
-            
-            # Add player stats
-            kills = player.get("kills", 0)
-            deaths = player.get("deaths", 0)
-            kd_ratio = kills / max(deaths, 1)
-            
-            embed.add_field(name="Total Kills", value=str(kills), inline=True)
-            embed.add_field(name="Total Deaths", value=str(deaths), inline=True)
-            embed.add_field(name="K/D Ratio", value=f"{kd_ratio:.2f}", inline=True)
-            
-            # Process rivalries
-            for rivalry in rivalries[:8]:  # Limit to 8 rivalries per embed
-                # Get rivalry from player's perspective
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            try:
                 stats = rivalry.get_stats_for_player(player_id)
                 
-                # Create field for rivalry
-                title = f"vs {stats['opponent_name']}"
+                # Get information from stats
+                opponent_name = stats.get("opponent_name", "Unknown")
+                kills = stats.get("kills", 0)
+                deaths = stats.get("deaths", 0)
+                kd_ratio = stats.get("kd_ratio", 0)
+                intensity = stats.get("intensity_score", 0)
+                is_leading = stats.get("is_leading", False)
                 
-                if stats['is_leading']:
-                    value = f"LEADING {stats['kills']} - {stats['deaths']}"
-                elif stats['kills'] == stats['deaths']:
-                    value = f"TIED {stats['kills']} - {stats['deaths']}"
+                # Determine which player is which
+                if player_id == rivalry.player1_id:
+                    # Player is player1
+                    embed = EmbedBuilder.rivalry(
+                        player1_name=player_name,
+                        player2_name=opponent_name,
+                        player1_kills=kills,
+                        player2_kills=deaths,
+                        total_kills=rivalry.total_kills,
+                        last_kill=rivalry.last_kill,
+                        last_weapon=rivalry.last_weapon,
+                        last_location=rivalry.last_location
+                    )
                 else:
-                    value = f"TRAILING {stats['kills']} - {stats['deaths']}"
+                    # Player is player2
+                    embed = EmbedBuilder.rivalry(
+                        player1_name=player_name,
+                        player2_name=opponent_name,
+                        player1_kills=kills,
+                        player2_kills=deaths,
+                        total_kills=rivalry.total_kills,
+                        last_kill=rivalry.last_kill,
+                        last_weapon=rivalry.last_weapon,
+                        last_location=rivalry.last_location
+                    )
                 
-                value += f" (K/D: {stats['kd_ratio']:.2f})"
-                
-                # Add field
-                embed.add_field(
-                    name=title,
-                    value=value,
-                    inline=False
-                )
-            
-            await interaction.followup.send(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error showing player rivalries: {e}")
-            await interaction.followup.send(
-                "An error occurred while retrieving player rivalries. Please try again later.",
-                ephemeral=True
+                embeds.append(embed)
+            except ValueError:
+                # Skip rivalries where player isn't part of it
+                continue
+        
+        if not embeds:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"Player `{player_name}` doesn't have any valid rivalries."
             )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0])
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds)
     
+    @rivalry_group.command(name="top")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        limit="Maximum number of rivalries to show (default: 10)"
+    )
     async def _rivalries_top(
         self,
         interaction: discord.Interaction,
-        server_id: str,
-        limit: int = 10
-    ):
-        """Show top rivalries by total kills
+        server_id: Optional[str] = None,
+        limit: Optional[int] = 10
+    ) -> None:
+        """View top rivalries by total kills
         
         Args:
             interaction: Discord interaction
-            server_id: Server ID
-            limit: Maximum number of rivalries to show
+            server_id: Server ID (optional)
+            limit: Maximum number of rivalries to show (default: 10)
         """
-        # Defer response for potentially long DB operations
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer()
         
-        try:
-            # Get server info
-            db = await get_db()
-            server = await db.get_server_by_id(server_id)
-            server_name = server['name'] if server else f"Server {server_id}"
-            
-            # Get top rivalries
-            rivalries = await Rivalry.get_top_rivalries(server_id, limit)
-            
-            if not rivalries:
-                await interaction.followup.send(
-                    f"No significant rivalries found on server **{server_name}**.",
-                    ephemeral=False
-                )
-                return
-            
-            # Create embed
-            embed = EmbedBuilder.create_base_embed(
-                title=f"Top Rivalries on {server_name}",
-                description=f"Showing top {len(rivalries)} rivalries by total kills:",
-                guild=interaction.guild
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # Get top rivalries
+        rivalries = await Rivalry.get_top_rivalries(server_id, limit)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"There are no rivalries on server `{server_id}` yet."
             )
-            
-            # Process rivalries
-            for i, rivalry in enumerate(rivalries):
-                # Get leader
-                leader_id, leader_name = rivalry.get_leader()
-                
-                # Determine opponent
-                if leader_id == rivalry.player1_id:
-                    opponent_name = rivalry.player2_name
-                    leader_kills = rivalry.player1_kills
-                    opponent_kills = rivalry.player2_kills
-                else:
-                    opponent_name = rivalry.player1_name
-                    leader_kills = rivalry.player2_kills
-                    opponent_kills = rivalry.player1_kills
-                
-                # Create field title and value
-                title = f"{i+1}. {leader_name} vs {opponent_name}"
-                value = f"{leader_kills} - {opponent_kills} ({rivalry.total_kills} total)"
-                
-                # Add more stats
-                if rivalry.last_kill:
-                    timestamp = int(rivalry.last_kill.timestamp())
-                    value += f"\nLast kill: <t:{timestamp}:R>"
-                
-                value += f"\nWeapon: {rivalry.last_weapon}" if rivalry.last_weapon else ""
-                
-                # Add field
-                embed.add_field(
-                    name=title,
-                    value=value,
-                    inline=False
-                )
-            
             await interaction.followup.send(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error showing top rivalries: {e}")
-            await interaction.followup.send(
-                "An error occurred while retrieving top rivalries. Please try again later.",
-                ephemeral=True
+            return
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            embed = EmbedBuilder.rivalry(
+                player1_name=rivalry.player1_name,
+                player2_name=rivalry.player2_name,
+                player1_kills=rivalry.player1_kills,
+                player2_kills=rivalry.player2_kills,
+                total_kills=rivalry.total_kills,
+                last_kill=rivalry.last_kill,
+                last_weapon=rivalry.last_weapon,
+                last_location=rivalry.last_location
             )
+            
+            embeds.append(embed)
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0])
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds)
     
+    @rivalry_group.command(name="closest")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        limit="Maximum number of rivalries to show (default: 10)"
+    )
     async def _rivalries_closest(
         self,
         interaction: discord.Interaction,
-        server_id: str,
-        limit: int = 10
-    ):
-        """Show closest (most evenly matched) rivalries
+        server_id: Optional[str] = None,
+        limit: Optional[int] = 10
+    ) -> None:
+        """View closest rivalries by score difference
         
         Args:
             interaction: Discord interaction
-            server_id: Server ID
-            limit: Maximum number of rivalries to show
+            server_id: Server ID (optional)
+            limit: Maximum number of rivalries to show (default: 10)
         """
-        # Defer response for potentially long DB operations
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer()
         
-        try:
-            # Get server info
-            db = await get_db()
-            server = await db.get_server_by_id(server_id)
-            server_name = server['name'] if server else f"Server {server_id}"
-            
-            # Get closest rivalries
-            rivalries = await Rivalry.get_closest_rivalries(server_id, limit)
-            
-            if not rivalries:
-                await interaction.followup.send(
-                    f"No significant rivalries found on server **{server_name}**.",
-                    ephemeral=False
-                )
-                return
-            
-            # Create embed
-            embed = EmbedBuilder.create_base_embed(
-                title=f"Most Evenly Matched Rivalries on {server_name}",
-                description=f"Showing {len(rivalries)} closest rivalries by score difference:",
-                guild=interaction.guild
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # Get closest rivalries
+        rivalries = await Rivalry.get_closest_rivalries(server_id, limit)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Rivalries",
+                description=f"There are no rivalries on server `{server_id}` yet."
             )
-            
-            # Process rivalries
-            for i, rivalry in enumerate(rivalries):
-                # Format names and scores
-                difference = abs(rivalry.score_difference)
-                
-                if rivalry.player1_kills >= rivalry.player2_kills:
-                    title = f"{i+1}. {rivalry.player1_name} vs {rivalry.player2_name}"
-                    value = f"{rivalry.player1_kills} - {rivalry.player2_kills} (Diff: {difference})"
-                else:
-                    title = f"{i+1}. {rivalry.player2_name} vs {rivalry.player1_name}"
-                    value = f"{rivalry.player2_kills} - {rivalry.player1_kills} (Diff: {difference})"
-                
-                # Add more stats
-                value += f"\nTotal Fights: {rivalry.total_kills}"
-                
-                if rivalry.last_kill:
-                    timestamp = int(rivalry.last_kill.timestamp())
-                    value += f"\nLast kill: <t:{timestamp}:R>"
-                
-                # Add field
-                embed.add_field(
-                    name=title,
-                    value=value,
-                    inline=False
-                )
-            
             await interaction.followup.send(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error showing closest rivalries: {e}")
-            await interaction.followup.send(
-                "An error occurred while retrieving closest rivalries. Please try again later.",
-                ephemeral=True
+            return
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            embed = EmbedBuilder.rivalry(
+                player1_name=rivalry.player1_name,
+                player2_name=rivalry.player2_name,
+                player1_kills=rivalry.player1_kills,
+                player2_kills=rivalry.player2_kills,
+                total_kills=rivalry.total_kills,
+                last_kill=rivalry.last_kill,
+                last_weapon=rivalry.last_weapon,
+                last_location=rivalry.last_location
             )
+            
+            embeds.append(embed)
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0])
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds)
     
+    @rivalry_group.command(name="recent")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        limit="Maximum number of rivalries to show (default: 10)",
+        days="Number of days to look back (default: 7)"
+    )
     async def _rivalries_recent(
         self,
         interaction: discord.Interaction,
+        server_id: Optional[str] = None,
+        limit: Optional[int] = 10,
+        days: Optional[int] = 7
+    ) -> None:
+        """View recently active rivalries
+        
+        Args:
+            interaction: Discord interaction
+            server_id: Server ID (optional)
+            limit: Maximum number of rivalries to show (default: 10)
+            days: Number of days to look back (default: 7)
+        """
+        await interaction.response.defer()
+        
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # Get recent rivalries
+        rivalries = await Rivalry.get_recent_rivalries(server_id, limit, days)
+        
+        if not rivalries:
+            embed = EmbedBuilder.info(
+                title="No Recent Rivalries",
+                description=f"There are no rivalries active in the last {days} days on server `{server_id}`."
+            )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Create embeds for each rivalry
+        embeds = []
+        for rivalry in rivalries:
+            embed = EmbedBuilder.rivalry(
+                player1_name=rivalry.player1_name,
+                player2_name=rivalry.player2_name,
+                player1_kills=rivalry.player1_kills,
+                player2_kills=rivalry.player2_kills,
+                total_kills=rivalry.total_kills,
+                last_kill=rivalry.last_kill,
+                last_weapon=rivalry.last_weapon,
+                last_location=rivalry.last_location
+            )
+            
+            embeds.append(embed)
+        
+        # If only one rivalry, show it directly
+        if len(embeds) == 1:
+            await interaction.followup.send(embed=embeds[0])
+        else:
+            # Show paginated embeds for multiple rivalries
+            await paginate_embeds(interaction, embeds)
+    
+    @rivalry_group.command(name="between")
+    @app_commands.describe(
+        server_id="The server ID (default: first available server)",
+        player1="First player name",
+        player2="Second player name"
+    )
+    async def _rivalries_between(
+        self,
+        interaction: discord.Interaction,
+        server_id: Optional[str] = None,
+        player1: str = None,
+        player2: str = None
+    ) -> None:
+        """View rivalry between two specific players
+        
+        Args:
+            interaction: Discord interaction
+            server_id: Server ID (optional)
+            player1: First player name
+            player2: Second player name
+        """
+        await interaction.response.defer()
+        
+        # Get server ID from guild config if not provided
+        if not server_id:
+            # For now, hardcode a test server ID
+            server_id = "test_server"
+        
+        # Validate player names
+        if not player1 or not player2:
+            embed = EmbedBuilder.error(
+                title="Missing Players",
+                description="Please specify both player names."
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # TODO: In a real implementation, we would verify the player names
+        # For now, we'll just assume they are valid and are the player IDs
+        player1_id = player1
+        player2_id = player2
+        
+        # Get rivalry between players
+        rivalry = await Rivalry.get_by_players(server_id, player1_id, player2_id)
+        
+        if not rivalry:
+            embed = EmbedBuilder.info(
+                title="No Rivalry",
+                description=f"There is no rivalry between `{player1}` and `{player2}` on server `{server_id}`."
+            )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Create rivalry embed
+        embed = EmbedBuilder.rivalry(
+            player1_name=rivalry.player1_name,
+            player2_name=rivalry.player2_name,
+            player1_kills=rivalry.player1_kills,
+            player2_kills=rivalry.player2_kills,
+            total_kills=rivalry.total_kills,
+            last_kill=rivalry.last_kill,
+            last_weapon=rivalry.last_weapon,
+            last_location=rivalry.last_location
+        )
+        
+        await interaction.followup.send(embed=embed)
+    
+    @rivalry_group.command(name="record_kill")
+    @app_commands.describe(
+        server_id="The server ID",
+        killer="Killer player name",
+        victim="Victim player name",
+        weapon="Weapon used (optional)",
+        location="Kill location (optional)"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def _rivalries_record_kill(
+        self,
+        interaction: discord.Interaction,
         server_id: str,
-        limit: int = 10,
-        days: int = 7
-    ):
-        """Show recently active rivalries
+        killer: str,
+        victim: str,
+        weapon: Optional[str] = None,
+        location: Optional[str] = None
+    ) -> None:
+        """Record a kill and update rivalry (Admin only)
         
         Args:
             interaction: Discord interaction
             server_id: Server ID
-            limit: Maximum number of rivalries to show
-            days: Number of days to look back
+            killer: Killer player name
+            victim: Victim player name
+            weapon: Weapon used (optional)
+            location: Kill location (optional)
         """
-        # Defer response for potentially long DB operations
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
         
-        try:
-            # Get server info
-            db = await get_db()
-            server = await db.get_server_by_id(server_id)
-            server_name = server['name'] if server else f"Server {server_id}"
-            
-            # Get recent rivalries
-            rivalries = await Rivalry.get_recent_rivalries(server_id, limit, days)
-            
-            if not rivalries:
-                await interaction.followup.send(
-                    f"No recent rivalry activity found on server **{server_name}** in the last {days} days.",
-                    ephemeral=False
-                )
-                return
-            
-            # Create embed
-            embed = EmbedBuilder.create_base_embed(
-                title=f"Recent Rivalry Activity on {server_name}",
-                description=f"Showing {len(rivalries)} rivalries with activity in the last {days} days:",
-                guild=interaction.guild
+        # Check admin permissions
+        if not has_admin_permission(interaction):
+            embed = EmbedBuilder.error(
+                title="Permission Denied",
+                description="You don't have permission to use this command."
             )
-            
-            # Process rivalries
-            for i, rivalry in enumerate(rivalries):
-                # Get recent activity
-                recent_kills = rivalry.recent_kills or []
-                
-                if not recent_kills:
-                    continue
-                
-                # Sort by timestamp (newest first)
-                sorted_kills = sorted(
-                    recent_kills, 
-                    key=lambda k: k.get("timestamp", datetime.min), 
-                    reverse=True
-                )
-                
-                # Get latest kill
-                latest = sorted_kills[0]
-                killer_name = latest.get("killer_name", "Unknown")
-                victim_name = latest.get("victim_name", "Unknown")
-                weapon = latest.get("weapon", "Unknown")
-                timestamp = latest.get("timestamp")
-                
-                # Format title and value
-                title = f"{i+1}. {rivalry.player1_name} vs {rivalry.player2_name}"
-                
-                value = [
-                    f"Score: {rivalry.player1_kills} - {rivalry.player2_kills}",
-                    f"Latest: **{killer_name}** killed **{victim_name}** with **{weapon}**"
-                ]
-                
-                if timestamp:
-                    ts = int(timestamp.timestamp()) if isinstance(timestamp, datetime) else int(timestamp)
-                    value.append(f"When: <t:{ts}:R>")
-                
-                # Add field
-                embed.add_field(
-                    name=title,
-                    value="\n".join(value),
-                    inline=False
-                )
-            
-            await interaction.followup.send(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error showing recent rivalries: {e}")
-            await interaction.followup.send(
-                "An error occurred while retrieving recent rivalries. Please try again later.",
-                ephemeral=True
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # TODO: In a real implementation, we would verify the player names
+        # For now, we'll just assume they are valid and are the player IDs
+        killer_id = killer
+        victim_id = victim
+        
+        # Record kill
+        rivalry = await Rivalry.record_kill(
+            server_id=server_id,
+            killer_id=killer_id,
+            killer_name=killer,
+            victim_id=victim_id,
+            victim_name=victim,
+            weapon=weapon,
+            location=location
+        )
+        
+        # Create success embed
+        embed = EmbedBuilder.success(
+            title="Kill Recorded",
+            description=f"Successfully recorded kill: `{killer}` killed `{victim}`"
+        )
+        
+        # Add details
+        if weapon:
+            embed.add_field(
+                name="Weapon",
+                value=weapon,
+                inline=True
             )
+        
+        if location:
+            embed.add_field(
+                name="Location",
+                value=location,
+                inline=True
+            )
+        
+        await interaction.followup.send(embed=embed)
+        
+        # Show updated rivalry
+        rivalry_embed = EmbedBuilder.rivalry(
+            player1_name=rivalry.player1_name,
+            player2_name=rivalry.player2_name,
+            player1_kills=rivalry.player1_kills,
+            player2_kills=rivalry.player2_kills,
+            total_kills=rivalry.total_kills,
+            last_kill=rivalry.last_kill,
+            last_weapon=rivalry.last_weapon,
+            last_location=rivalry.last_location
+        )
+        
+        await interaction.followup.send(embed=rivalry_embed)
 
-async def setup(bot: commands.Bot):
-    """Add the Rivalries cog to the bot
-    
-    Args:
-        bot: Bot instance
-    """
-    await bot.add_cog(Rivalries(bot))
+async def setup(bot: commands.Bot) -> None:
+    """Set up the rivalries cog"""
+    await bot.add_cog(RivalriesCog(bot))
