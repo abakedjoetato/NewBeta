@@ -50,8 +50,12 @@ class BountiesCog(commands.GroupCog, name="bounty"):
     async def check_expired_bounties(self):
         """Background task to expire old bounties"""
         try:
+            # Get database connection
+            from utils.database import get_db
+            db = await get_db()
+            
             # Expire old bounties
-            expired_count = await Bounty.expire_old_bounties()
+            expired_count = await Bounty.expire_old_bounties(db)
             if expired_count > 0:
                 logger.info(f"Expired {expired_count} bounties")
         except Exception as e:

@@ -6,7 +6,7 @@ import os
 import asyncio
 from typing import Any, Dict, List, Optional, Union, Callable
 import discord
-from discord.ext import commands, pages
+from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,106 @@ def is_home_guild_admin(bot, user_id: int) -> bool:
     
     # Check if user is an admin
     return member.guild_permissions.administrator or member.id == bot.owner_id
+    
+def has_admin_permission(ctx) -> bool:
+    """Check if a user has admin permission in the current guild
+    
+    Args:
+        ctx: Command context
+        
+    Returns:
+        True if the user has admin permission, False otherwise
+    """
+    # Check if user is bot owner
+    if ctx.author.id == ctx.bot.owner_id:
+        return True
+        
+    # Check if user is home guild admin
+    if is_home_guild_admin(ctx.bot, ctx.author.id):
+        return True
+        
+    # Check if user has admin permission in the current guild
+    if ctx.guild and ctx.author.guild_permissions.administrator:
+        return True
+        
+    return False
+    
+def has_mod_permission(ctx) -> bool:
+    """Check if a user has moderator permission in the current guild
+    
+    Args:
+        ctx: Command context
+        
+    Returns:
+        True if the user has moderator permission, False otherwise
+    """
+    # Admin permissions include mod permissions
+    if has_admin_permission(ctx):
+        return True
+        
+    # Check for specific mod permissions
+    if ctx.guild and ctx.author.guild_permissions.manage_messages:
+        return True
+        
+    # Check if user has a mod role
+    if ctx.guild:
+        # Try to get mod roles from guild settings
+        guild_id = str(ctx.guild.id)
+        try:
+            # This part would normally query the database for mod roles
+            # For now, just check for basic mod role names
+            mod_role_names = ['mod', 'moderator']
+            for role in ctx.author.roles:
+                if role.name.lower() in mod_role_names:
+                    return True
+        except Exception as e:
+            logger.error(f"Error checking mod roles: {e}")
+        
+    return False
+    
+async def get_guild_premium_tier(db, guild_id: str) -> int:
+    """Get premium tier for a guild
+    
+    Args:
+        db: Database connection
+        guild_id: Discord guild ID
+        
+    Returns:
+        Premium tier (0-3)
+    """
+    # Get guild from database
+    guild_coll = db["guilds"]
+    guild_doc = await guild_coll.find_one({"guild_id": str(guild_id)})
+    
+    if not guild_doc:
+        return 0
+        
+    return guild_doc.get("premium_tier", 0)
+    
+async def update_voice_channel_name(bot, channel_id: int, name: str) -> bool:
+    """Update voice channel name
+    
+    Args:
+        bot: Discord bot instance
+        channel_id: Voice channel ID
+        name: New channel name
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            channel = await bot.fetch_channel(channel_id)
+            
+        if not channel:
+            return False
+            
+        await channel.edit(name=name)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update voice channel name: {e}")
+        return False
 
 def format_datetime(dt) -> str:
     """Format a datetime object into a string
@@ -61,6 +161,44 @@ def format_datetime(dt) -> str:
         return "Unknown"
         
     return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+def format_time_ago(dt) -> str:
+    """Format a datetime object into a human-readable 'time ago' string
+    
+    Args:
+        dt: Datetime object
+        
+    Returns:
+        Human-readable 'time ago' string (e.g., "5 minutes ago", "2 hours ago")
+    """
+    if not dt:
+        return "Unknown"
+        
+    now = datetime.utcnow()
+    diff = now - dt
+    
+    seconds = diff.total_seconds()
+    
+    if seconds < 60:
+        return f"{int(seconds)} seconds ago"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds // 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif seconds < 604800:  # 7 days
+        days = int(seconds // 86400)
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    elif seconds < 2592000:  # 30 days
+        weeks = int(seconds // 604800)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    elif seconds < 31536000:  # 365 days
+        months = int(seconds // 2592000)
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    else:
+        years = int(seconds // 31536000)
+        return f"{years} year{'s' if years != 1 else ''} ago"
 
 def format_duration(seconds: int) -> str:
     """Format a duration in seconds into a human-readable string
@@ -157,9 +295,30 @@ async def paginate_embeds(ctx, embeds: List[discord.Embed], timeout: int = 180):
     if len(embeds) == 1:
         await ctx.send(embed=embeds[0])
         return
+    
+    # Create a simple custom paginator view
+    class PaginationView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=timeout)
+            self.current_page = 0
+            self.embeds = embeds
         
-    paginator = pages.Paginator(pages=embeds, timeout=timeout)
-    await paginator.respond(ctx.interaction if hasattr(ctx, 'interaction') else ctx)
+        @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+        async def previous_button(self, button, interaction):
+            self.current_page = max(0, self.current_page - 1)
+            await interaction.response.edit_message(embed=self.embeds[self.current_page])
+        
+        @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+        async def next_button(self, button, interaction):
+            self.current_page = min(len(self.embeds) - 1, self.current_page + 1)
+            await interaction.response.edit_message(embed=self.embeds[self.current_page])
+    
+    # Send the first embed with pagination view
+    view = PaginationView()
+    if hasattr(ctx, 'interaction') and ctx.interaction:
+        await ctx.interaction.response.send_message(embed=embeds[0], view=view)
+    else:
+        await ctx.send(embed=embeds[0], view=view)
 
 def chunk_list(lst: List[Any], chunk_size: int) -> List[List[Any]]:
     """Split a list into chunks of specified size
@@ -251,3 +410,47 @@ async def throttle(coro, max_calls: int, interval: float, key: Optional[Callable
     # Increment counter and run the coroutine
     state["calls"] += 1
     return await coro
+    
+async def confirm(ctx, message: str = "Are you sure?", timeout: int = 60, delete_after: bool = True) -> bool:
+    """Ask for confirmation before proceeding with an action
+    
+    Args:
+        ctx: Command context
+        message: Message to show
+        timeout: Timeout in seconds
+        delete_after: Whether to delete the confirmation message after
+        
+    Returns:
+        True if confirmed, False otherwise
+    """
+    class ConfirmView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=timeout)
+            self.value = None
+            
+        @discord.ui.button(label="Yes", style=discord.ButtonStyle.green)
+        async def yes_button(self, button, interaction):
+            self.value = True
+            self.stop()
+            
+        @discord.ui.button(label="No", style=discord.ButtonStyle.red)
+        async def no_button(self, button, interaction):
+            self.value = False
+            self.stop()
+            
+    view = ConfirmView()
+    
+    # Send the confirmation message
+    msg = await ctx.send(message, view=view)
+    
+    # Wait for a response
+    await view.wait()
+    
+    # Delete the message if needed
+    if delete_after:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+    
+    return view.value is True

@@ -14,6 +14,42 @@ from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
+# Global database manager instance
+_db_manager = None
+
+async def initialize_db():
+    """Initialize the database connection
+    
+    Returns:
+        DatabaseManager: Database manager instance
+    """
+    global _db_manager
+    
+    if _db_manager is None:
+        logger.info("Initializing database manager")
+        _db_manager = DatabaseManager()
+        await _db_manager.initialize()
+    
+    return _db_manager
+    
+async def get_db():
+    """Get the database manager instance
+    
+    Returns:
+        DatabaseManager: Database manager instance
+        
+    Raises:
+        RuntimeError: If database is not initialized
+    """
+    global _db_manager
+    
+    if _db_manager is None:
+        # Auto-initialize database if not already initialized
+        logger.info("Database not initialized, initializing now...")
+        return await initialize_db()
+        
+    return _db_manager
+
 class DatabaseManager:
     """MongoDB database connection manager"""
     
@@ -107,7 +143,7 @@ class DatabaseManager:
     
     async def ensure_connected(self):
         """Ensure connection to MongoDB database"""
-        if not self._connected or not self._client or not self._db:
+        if not self._connected or self._client is None or self._db is None:
             await self.connect()
     
     @property
@@ -117,7 +153,7 @@ class DatabaseManager:
         Returns:
             MongoDB database connection
         """
-        if not self._connected or not self._db:
+        if not self._connected or self._db is None:
             raise RuntimeError("Not connected to MongoDB database")
             
         return self._db
@@ -129,7 +165,7 @@ class DatabaseManager:
         Returns:
             MongoDB client connection
         """
-        if not self._connected or not self._client:
+        if not self._connected or self._client is None:
             raise RuntimeError("Not connected to MongoDB database")
             
         return self._client
@@ -209,7 +245,7 @@ class DatabaseManager:
         Returns:
             MongoDB collection
         """
-        if not self._connected or not self._db:
+        if not self._connected or self._db is None:
             raise RuntimeError("Not connected to MongoDB database")
             
         return self._db[name]

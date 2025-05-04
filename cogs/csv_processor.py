@@ -35,7 +35,8 @@ class CSVProcessorCog(commands.Cog):
         """
         self.bot = bot
         self.csv_parser = CSVParser()
-        self.sftp_manager = SFTPManager()
+        # Don't initialize SFTP manager here, we'll create instances as needed
+        self.sftp_managers = {}  # Store SFTP managers by server_id
         self.processing_lock = asyncio.Lock()
         self.is_processing = False
         self.last_processed = {}  # Track last processed timestamp per server
@@ -44,8 +45,15 @@ class CSVProcessorCog(commands.Cog):
         self.process_csv_files_task.start()
     
     def cog_unload(self):
-        """Stop background tasks when cog is unloaded"""
+        """Stop background tasks and close connections when cog is unloaded"""
         self.process_csv_files_task.cancel()
+        
+        # Close all SFTP connections
+        for server_id, sftp_manager in self.sftp_managers.items():
+            try:
+                asyncio.create_task(sftp_manager.disconnect())
+            except Exception as e:
+                logger.error(f"Error disconnecting SFTP for server {server_id}: {e}")
     
     @tasks.loop(minutes=5.0)
     async def process_csv_files_task(self):
@@ -112,12 +120,10 @@ class CSVProcessorCog(commands.Cog):
             Tuple[int, int]: Number of files processed and total death events processed
         """
         # Connect to SFTP server
-        sftp_config = {
-            "hostname": config["sftp_host"],
-            "port": config["sftp_port"],
-            "username": config["sftp_username"],
-            "password": config["sftp_password"]
-        }
+        hostname = config["sftp_host"]
+        port = config["sftp_port"]
+        username = config["sftp_username"]
+        password = config["sftp_password"]
         
         # Get last processed time or default to 24 hours ago
         last_time = self.last_processed.get(server_id, datetime.now() - timedelta(days=1))
@@ -126,10 +132,25 @@ class CSVProcessorCog(commands.Cog):
         last_time_str = last_time.strftime("%Y.%m.%d-%H.%M.%S")
         
         try:
-            async with self.sftp_manager.create_connection(**sftp_config) as sftp:
+            # Create a new SFTP client for this server if not already existing
+            if server_id not in self.sftp_managers:
+                self.sftp_managers[server_id] = SFTPManager(
+                    hostname=hostname,
+                    port=port,
+                    username=username,
+                    password=password
+                )
+            
+            # Get the SFTP client for this server
+            sftp = self.sftp_managers[server_id]
+            
+            # Connect to the SFTP server
+            await sftp.connect()
+            
+            try:
                 # List directory
                 path = config["sftp_path"]
-                files = await sftp.listdir(path)
+                files = await sftp.list_directory(path)
                 
                 # Filter for CSV files
                 csv_pattern = config.get("csv_pattern", r".*\.csv$")
@@ -149,32 +170,37 @@ class CSVProcessorCog(commands.Cog):
                     try:
                         # Download file content
                         file_path = f"{path}/{file}"
-                        content = await sftp.get_file_content(file_path)
+                        content = await sftp.download_file(file_path)
                         
-                        # Process content
-                        processed, errors = await self.csv_parser.process_and_update_rivalries(
-                            server_id, content.decode('utf-8')
-                        )
-                        
-                        events_processed += processed
-                        files_processed += 1
-                        
-                        if errors:
-                            logger.warning(f"Errors processing {file}: {len(errors)} errors")
-                        
-                        # Update last processed time if this is the newest file
-                        if file == new_files[-1]:
-                            try:
-                                file_time = datetime.strptime(file.split('.csv')[0], "%Y.%m.%d-%H.%M.%S")
-                                self.last_processed[server_id] = file_time
-                            except ValueError:
-                                # If we can't parse the timestamp from filename, use current time
-                                self.last_processed[server_id] = datetime.now()
+                        if content:
+                            # Process content
+                            processed, errors = await self.csv_parser.process_and_update_rivalries(
+                                server_id, content.decode('utf-8')
+                            )
+                            
+                            events_processed += processed
+                            files_processed += 1
+                            
+                            if errors:
+                                logger.warning(f"Errors processing {file}: {len(errors)} errors")
+                            
+                            # Update last processed time if this is the newest file
+                            if file == new_files[-1]:
+                                try:
+                                    file_time = datetime.strptime(file.split('.csv')[0], "%Y.%m.%d-%H.%M.%S")
+                                    self.last_processed[server_id] = file_time
+                                except ValueError:
+                                    # If we can't parse the timestamp from filename, use current time
+                                    self.last_processed[server_id] = datetime.now()
                     
                     except Exception as e:
                         logger.error(f"Error processing file {file}: {str(e)}")
                 
                 return files_processed, events_processed
+                
+            finally:
+                # Disconnect from the SFTP server
+                await sftp.disconnect()
                 
         except Exception as e:
             logger.error(f"SFTP error for server {server_id}: {str(e)}")

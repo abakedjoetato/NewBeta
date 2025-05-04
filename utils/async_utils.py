@@ -306,3 +306,128 @@ async def semaphore_gather(semaphore: asyncio.Semaphore, coros: List[Coroutine])
             
     return await asyncio.gather(*[_run_with_semaphore(coro) for coro in coros], 
                                return_exceptions=True)
+
+
+class BackgroundTask:
+    """Class for managing background tasks with proper lifecycle management"""
+    
+    def __init__(self, coro_func, minutes: float = 5.0, name: str = None,
+                 max_consecutive_errors: int = 3, initial_delay: float = 5.0):
+        """Initialize background task
+        
+        Args:
+            coro_func: Coroutine function to run as a task
+            minutes: How often to run the task in minutes (default: 5.0)
+            name: Name for the task (default: function name)
+            max_consecutive_errors: Maximum number of consecutive errors before stopping (default: 3)
+            initial_delay: Initial delay before first run in seconds (default: 5.0)
+        """
+        self.coro_func = coro_func
+        self.minutes = minutes
+        self.name = name or coro_func.__name__
+        self.max_consecutive_errors = max_consecutive_errors
+        self.initial_delay = initial_delay
+        
+        self.task = None
+        self.is_running = False
+        self.error_count = 0
+        self.last_error = None
+        self.last_success = None
+        self.total_runs = 0
+        self.successful_runs = 0
+        
+        # Create logger
+        self.logger = logging.getLogger(f"background_task.{self.name}")
+    
+    async def _task_wrapper(self):
+        """Wrapper around the actual task function"""
+        # Wait initial delay
+        await asyncio.sleep(self.initial_delay)
+        
+        self.logger.info(f"Background task '{self.name}' started")
+        
+        while self.is_running:
+            start_time = time.time()
+            
+            try:
+                # Run the task
+                await self.coro_func()
+                
+                # Update success metrics
+                self.error_count = 0
+                self.last_success = datetime.utcnow()
+                self.successful_runs += 1
+                
+            except asyncio.CancelledError:
+                # Task was cancelled, exit cleanly
+                self.logger.info(f"Background task '{self.name}' cancelled")
+                break
+                
+            except Exception as e:
+                # Log error and update metrics
+                self.error_count += 1
+                self.last_error = (datetime.utcnow(), str(e))
+                
+                self.logger.error(f"Error in background task '{self.name}': {str(e)}", exc_info=True)
+                
+                if self.error_count >= self.max_consecutive_errors:
+                    self.logger.critical(
+                        f"Background task '{self.name}' stopped after {self.error_count} consecutive errors"
+                    )
+                    self.is_running = False
+                    break
+            
+            finally:
+                # Update total runs
+                self.total_runs += 1
+                
+                # Calculate time taken and sleep accordingly
+                elapsed = time.time() - start_time
+                sleep_time = max(0, (self.minutes * 60) - elapsed)
+                
+                if sleep_time > 0 and self.is_running:
+                    await asyncio.sleep(sleep_time)
+        
+        self.logger.info(f"Background task '{self.name}' stopped")
+    
+    def start(self):
+        """Start the background task"""
+        if self.is_running:
+            raise RuntimeError(f"Background task '{self.name}' already running")
+            
+        self.is_running = True
+        self.task = asyncio.create_task(self._task_wrapper())
+        
+        return self.task
+    
+    def stop(self):
+        """Stop the background task"""
+        if not self.is_running:
+            return
+            
+        self.is_running = False
+        if self.task and not self.task.done():
+            self.task.cancel()
+    
+    def restart(self):
+        """Restart the background task"""
+        self.stop()
+        self.error_count = 0
+        return self.start()
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get task status
+        
+        Returns:
+            Dict: Status information
+        """
+        return {
+            "name": self.name,
+            "running": self.is_running,
+            "total_runs": self.total_runs,
+            "successful_runs": self.successful_runs,
+            "error_count": self.error_count,
+            "last_success": self.last_success,
+            "last_error": self.last_error,
+            "interval_minutes": self.minutes
+        }

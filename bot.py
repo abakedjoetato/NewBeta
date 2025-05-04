@@ -211,7 +211,9 @@ async def initialize_bot(force_sync=False):
     """
     # Initialize the database connection
     logger.info("Initializing database connection...")
-    db = await initialize_db()
+    db_manager = await initialize_db()
+    # Attach the database manager to the bot for global access
+    bot.db = db_manager
     logger.info("Database connection established")
     
     # Load all cogs

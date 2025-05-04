@@ -16,8 +16,8 @@ import asyncssh
 
 logger = logging.getLogger(__name__)
 
-class SFTPHandler:
-    """SFTP connection handler for game servers"""
+class SFTPClient:
+    """SFTP client for game servers"""
     
     def __init__(
         self,
@@ -364,3 +364,6 @@ class SFTPHandler:
         except Exception as e:
             logger.error(f"Failed to process file {remote_path}: {e}")
             return []
+            
+# Add SFTPManager as alias for SFTPClient to maintain backward compatibility
+SFTPManager = SFTPClient
