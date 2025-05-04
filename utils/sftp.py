@@ -1,622 +1,366 @@
 """
-SFTP Manager for the Tower of Temptation PvP Statistics Discord Bot.
+SFTP connection handler for Tower of Temptation PvP Statistics Bot
 
-This module provides:
-1. SFTP connection management
-2. Connection pooling
-3. File retrieval
-4. CSV file filtering
+This module provides utilities for connecting to game servers via SFTP 
+and retrieving log files.
 """
 import os
-import re
 import logging
 import asyncio
-import time
+import re
+import io
+from typing import List, Dict, Any, Optional, Tuple, Union, BinaryIO
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Set, Tuple, BinaryIO, Pattern
-
+import paramiko
 import asyncssh
-from asyncssh.misc import PermissionDenied, ConnectionLost
-
-from utils.async_utils import AsyncCache, RateLimiter, retryable, semaphore_gather
 
 logger = logging.getLogger(__name__)
 
-class SFTPManager:
-    """SFTP connection manager with connection pooling"""
+class SFTPHandler:
+    """SFTP connection handler for game servers"""
     
-    def __init__(self):
-        """Initialize SFTP manager"""
-        self._connections: Dict[str, Dict[str, Any]] = {}
-        self._connection_locks: Dict[str, asyncio.Lock] = {}
-        self._global_lock = asyncio.Lock()
-        self._rate_limiter = RateLimiter(calls=5, period=1.0, spread=True)
-    
-    def _get_conn_key(self, host: str, port: int, username: str, password: Optional[str] = None, key_path: Optional[str] = None) -> str:
-        """Get connection key for the given parameters
+    def __init__(
+        self,
+        hostname: str,
+        port: int,
+        username: str,
+        password: str,
+        timeout: int = 30,
+        max_retries: int = 3
+    ):
+        """Initialize SFTP handler
         
         Args:
-            host: SFTP server hostname
-            port: SFTP server port
+            hostname: SFTP hostname
+            port: SFTP port
             username: SFTP username
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
-            
-        Returns:
-            str: Connection key
+            password: SFTP password
+            timeout: Connection timeout in seconds
+            max_retries: Maximum number of connection retries
         """
-        # Create unique connection key
-        return f"{username}@{host}:{port}:{password or ''}:{key_path or ''}"
-    
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def _create_connection(self, host: str, port: int, username: str, password: Optional[str] = None, key_path: Optional[str] = None) -> Tuple[asyncssh.SSHClient, asyncssh.SFTPClient]:
-        """Create new SFTP connection
+        self.hostname = hostname
+        self.port = port
+        self.username = username
+        self.password = password
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self._sftp_client = None
+        self._ssh_client = None
+        self._connected = False
+        self._connection_attempts = 0
         
-        Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
-            
+    async def connect(self) -> bool:
+        """Connect to SFTP server
+        
         Returns:
-            Tuple[asyncssh.SSHClient, asyncssh.SFTPClient]: SSH client and SFTP client
+            True if connected successfully, False otherwise
         """
-        # Apply rate limiting
-        await self._rate_limiter.acquire()
-        
-        # Set up connection options
-        conn_options = {
-            "username": username,
-            "port": port,
-            "known_hosts": None
-        }
-        
-        # Add authentication
-        if password:
-            conn_options["password"] = password
-        elif key_path:
-            if os.path.exists(key_path):
-                conn_options["client_keys"] = [key_path]
-            else:
-                logger.error(f"Private key file not found: {key_path}")
-                raise FileNotFoundError(f"Private key file not found: {key_path}")
-        
+        if self._connected and self._sftp_client:
+            return True
+            
         try:
-            # Connect to server
-            logger.info(f"Connecting to SFTP server {username}@{host}:{port}")
-            ssh_client = await asyncssh.connect(host, **conn_options)
-            sftp_client = await ssh_client.start_sftp_client()
+            # Create asyncssh connection
+            self._ssh_client = await asyncssh.connect(
+                host=self.hostname,
+                port=self.port,
+                username=self.username,
+                password=self.password,
+                known_hosts=None,  # Disable known hosts check
+                connect_timeout=self.timeout
+            )
             
-            logger.info(f"Connected to SFTP server {username}@{host}:{port}")
-            return ssh_client, sftp_client
+            # Get SFTP client
+            self._sftp_client = await self._ssh_client.start_sftp_client()
             
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Failed to connect to SFTP server {username}@{host}:{port}: {str(e)}")
-            raise
-    
-    async def get_connection(self, host: str, port: int, username: str, password: Optional[str] = None, key_path: Optional[str] = None) -> Optional[asyncssh.SFTPClient]:
-        """Get or create SFTP connection
-        
-        Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
+            self._connected = True
+            self._connection_attempts = 0
             
-        Returns:
-            asyncssh.SFTPClient or None: SFTP client or None if error
-        """
-        # Get connection key
-        conn_key = self._get_conn_key(host, port, username, password, key_path)
-        
-        # Get or create connection lock
-        async with self._global_lock:
-            if conn_key not in self._connection_locks:
-                self._connection_locks[conn_key] = asyncio.Lock()
-        
-        # Get connection lock
-        lock = self._connection_locks[conn_key]
-        
-        # Acquire lock for this connection
-        async with lock:
-            # Check if connection exists
-            if conn_key in self._connections:
-                conn = self._connections[conn_key]
-                
-                # Check if connection is still active
-                ssh_client = conn["ssh_client"]
-                sftp_client = conn["sftp_client"]
-                last_used = conn["last_used"]
-                
-                if ssh_client and sftp_client and not ssh_client.is_closed():
-                    # Update last used timestamp
-                    conn["last_used"] = time.time()
-                    return sftp_client
-                else:
-                    # Connection is closed, remove it
-                    logger.info(f"Removing closed SFTP connection: {conn_key}")
-                    del self._connections[conn_key]
+            logger.info(f"Connected to SFTP server: {self.hostname}:{self.port}")
+            return True
             
-            try:
-                # Create new connection
-                ssh_client, sftp_client = await self._create_connection(host, port, username, password, key_path)
-                
-                # Store connection
-                self._connections[conn_key] = {
-                    "ssh_client": ssh_client,
-                    "sftp_client": sftp_client,
-                    "last_used": time.time()
-                }
-                
-                return sftp_client
-                
-            except Exception as e:
-                logger.error(f"Error getting SFTP connection: {str(e)}")
-                return None
-    
-    async def close_connection(self, host: str, port: int, username: str, password: Optional[str] = None, key_path: Optional[str] = None) -> bool:
-        """Close SFTP connection
-        
-        Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
+        except Exception as e:
+            self._connected = False
+            self._connection_attempts += 1
             
-        Returns:
-            bool: True if connection was closed
-        """
-        # Get connection key
-        conn_key = self._get_conn_key(host, port, username, password, key_path)
-        
-        # Get connection lock
-        async with self._global_lock:
-            if conn_key not in self._connection_locks:
+            logger.error(f"Failed to connect to SFTP server (attempt {self._connection_attempts}): {e}")
+            
+            if self._connection_attempts >= self.max_retries:
+                logger.critical("Maximum connection attempts reached. Giving up.")
                 return False
-        
-        # Get connection lock
-        lock = self._connection_locks[conn_key]
-        
-        # Acquire lock for this connection
-        async with lock:
-            # Check if connection exists
-            if conn_key in self._connections:
-                conn = self._connections[conn_key]
                 
-                # Close connection
-                ssh_client = conn["ssh_client"]
-                sftp_client = conn["sftp_client"]
-                
-                if sftp_client:
-                    sftp_client.close()
-                
-                if ssh_client:
-                    ssh_client.close()
-                
-                # Remove connection
-                del self._connections[conn_key]
-                
-                logger.info(f"Closed SFTP connection: {conn_key}")
-                return True
+            # Exponential backoff for reconnection
+            delay = min(30, 2 ** self._connection_attempts)
+            logger.info(f"Retrying connection in {delay} seconds...")
+            await asyncio.sleep(delay)
             
-            return False
+            return await self.connect()
     
-    async def close_all_connections(self) -> int:
-        """Close all SFTP connections
-        
-        Returns:
-            int: Number of closed connections
-        """
-        closed = 0
-        
-        # Get all connection keys
-        async with self._global_lock:
-            conn_keys = list(self._connections.keys())
-        
-        # Close each connection
-        for conn_key in conn_keys:
-            async with self._global_lock:
-                if conn_key in self._connections:
-                    conn = self._connections[conn_key]
-                    
-                    # Close connection
-                    ssh_client = conn["ssh_client"]
-                    sftp_client = conn["sftp_client"]
-                    
-                    if sftp_client:
-                        sftp_client.close()
-                    
-                    if ssh_client:
-                        ssh_client.close()
-                    
-                    # Remove connection
-                    del self._connections[conn_key]
-                    closed += 1
-        
-        logger.info(f"Closed {closed} SFTP connections")
-        return closed
+    async def disconnect(self):
+        """Disconnect from SFTP server"""
+        if self._sftp_client:
+            self._sftp_client.close()
+            self._sftp_client = None
+            
+        if self._ssh_client:
+            self._ssh_client.close()
+            self._ssh_client = None
+            
+        self._connected = False
+        logger.info("Disconnected from SFTP server")
     
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def list_files(self, sftp: asyncssh.SFTPClient, path: str, pattern: Optional[str] = None) -> List[str]:
-        """List files in directory matching pattern
+    async def ensure_connected(self):
+        """Ensure connection to SFTP server"""
+        if not self._connected or not self._sftp_client or not self._ssh_client:
+            await self.connect()
+    
+    async def list_directory(self, directory: str) -> List[str]:
+        """List files in directory
         
         Args:
-            sftp: SFTP client
-            path: Directory path
-            pattern: File pattern regex (default: None)
+            directory: Directory to list
             
         Returns:
-            List[str]: List of filenames
+            List of filenames
         """
+        await self.ensure_connected()
+        
         try:
-            # List files in directory
-            files = await sftp.readdir(path)
+            entries = await self._sftp_client.listdir(directory)
+            return entries
+        except Exception as e:
+            logger.error(f"Failed to list directory {directory}: {e}")
+            return []
             
-            # Filter files by pattern
-            if pattern:
-                regex = re.compile(pattern)
-                return [f.filename for f in files if f.filename and regex.match(f.filename)]
-            else:
-                return [f.filename for f in files if f.filename]
-                
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Error listing files in {path}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def get_file_info(self, sftp: asyncssh.SFTPClient, path: str) -> Optional[Dict[str, Any]]:
+    async def get_file_info(self, path: str) -> Optional[Dict[str, Any]]:
         """Get file information
         
         Args:
-            sftp: SFTP client
             path: File path
             
         Returns:
-            Dict or None: File information or None if error
+            File information or None if not found
         """
+        await self.ensure_connected()
+        
         try:
-            # Get file attributes
-            attrs = await sftp.stat(path)
-            
-            # Extract file information
+            stat = await self._sftp_client.stat(path)
             return {
-                "size": attrs.size,
-                "mtime": datetime.fromtimestamp(attrs.mtime),
-                "atime": datetime.fromtimestamp(attrs.atime),
-                "permissions": attrs.permissions,
-                "uid": attrs.uid,
-                "gid": attrs.gid,
-                "type": "directory" if attrs.type == 4 else "file"
+                "size": stat.size,
+                "mtime": datetime.fromtimestamp(stat.mtime),
+                "atime": datetime.fromtimestamp(stat.atime),
+                "is_dir": stat.type == 2,  # asyncssh.FILEXFER_TYPE_DIRECTORY = 2
+                "is_file": stat.type == 1,  # asyncssh.FILEXFER_TYPE_REGULAR = 1
+                "permissions": stat.permissions
             }
-                
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Error getting file info for {path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to get file info for {path}: {e}")
             return None
     
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def read_file(self, sftp: asyncssh.SFTPClient, path: str) -> Optional[bytes]:
-        """Read file contents
+    async def download_file(self, remote_path: str, local_path: Optional[str] = None) -> Optional[bytes]:
+        """Download file from SFTP server
         
         Args:
-            sftp: SFTP client
-            path: File path
+            remote_path: Remote file path
+            local_path: Optional local file path to save to
             
         Returns:
-            bytes or None: File contents or None if error
+            File contents as bytes if local_path not provided, otherwise None
         """
+        await self.ensure_connected()
+        
         try:
-            # Open file for reading
-            async with sftp.open(path, "rb") as f:
-                # Read file contents
-                return await f.read()
+            if local_path:
+                # Download to file
+                await self._sftp_client.get(remote_path, local_path)
+                logger.info(f"Downloaded {remote_path} to {local_path}")
+                return None
+            else:
+                # Download to memory
+                file_obj = io.BytesIO()
+                await self._sftp_client.getfo(remote_path, file_obj)
                 
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Error reading file {path}: {str(e)}")
+                # Reset position to beginning
+                file_obj.seek(0)
+                content = file_obj.read()
+                
+                logger.info(f"Downloaded {remote_path} to memory ({len(content)} bytes)")
+                return content
+                
+        except Exception as e:
+            logger.error(f"Failed to download file {remote_path}: {e}")
             return None
-    
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def read_file_chunk(self, sftp: asyncssh.SFTPClient, path: str, start: int, size: int) -> Optional[bytes]:
-        """Read chunk of file
+            
+    async def read_file_by_chunks(self, remote_path: str, chunk_size: int = 4096) -> Optional[List[bytes]]:
+        """Read file by chunks
         
         Args:
-            sftp: SFTP client
-            path: File path
-            start: Start position
-            size: Chunk size
+            remote_path: Remote file path
+            chunk_size: Chunk size in bytes
             
         Returns:
-            bytes or None: File chunk or None if error
+            List of chunks or None if failed
         """
-        try:
-            # Open file for reading
-            async with sftp.open(path, "rb") as f:
-                # Seek to start position
-                await f.seek(start)
-                
-                # Read chunk
-                return await f.read(size)
-                
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Error reading file chunk {path} (start={start}, size={size}): {str(e)}")
-            return None
-    
-    @retryable(max_retries=2, delay=1.0, exceptions=[ConnectionLost, PermissionDenied, OSError])
-    async def write_file(self, sftp: asyncssh.SFTPClient, path: str, data: Union[str, bytes]) -> bool:
-        """Write data to file
-        
-        Args:
-            sftp: SFTP client
-            path: File path
-            data: Data to write
-            
-        Returns:
-            bool: True if successful
-        """
-        try:
-            # Ensure directory exists
-            dirname = os.path.dirname(path)
-            if dirname:
-                try:
-                    await sftp.mkdir(dirname, exist_ok=True)
-                except asyncssh.SFTPError:
-                    pass
-            
-            # Open file for writing
-            async with sftp.open(path, "wb") as f:
-                # Write data
-                if isinstance(data, str):
-                    await f.write(data.encode("utf-8"))
-                else:
-                    await f.write(data)
-                    
-            return True
-                
-        except (OSError, asyncssh.Error) as e:
-            logger.error(f"Error writing to file {path}: {str(e)}")
-            return False
-    
-    async def find_csv_files(self, 
-                           host: str, 
-                           port: int, 
-                           username: str, 
-                           base_path: str,
-                           pattern: Optional[str] = None,
-                           recursive: bool = False,
-                           password: Optional[str] = None,
-                           key_path: Optional[str] = None,
-                           min_size: Optional[int] = None,
-                           max_age: Optional[datetime] = None,
-                           min_age: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Find CSV files on SFTP server
-        
-        Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            base_path: Base directory path
-            pattern: File pattern regex (default: None)
-            recursive: Search recursively (default: False)
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
-            min_size: Minimum file size (default: None)
-            max_age: Maximum file age (default: None)
-            min_age: Minimum file age (default: None)
-            
-        Returns:
-            List[Dict]: List of file information dictionaries
-        """
-        # Get SFTP connection
-        sftp = await self.get_connection(host, port, username, password, key_path)
-        if not sftp:
-            logger.error(f"Failed to connect to SFTP server {username}@{host}:{port}")
-            return []
+        await self.ensure_connected()
         
         try:
-            # List files in directory
-            files = await self.list_files(sftp, base_path, pattern)
-            
-            # Get file information for CSV files
-            result = []
-            for filename in files:
-                # Skip directories
-                file_path = os.path.join(base_path, filename)
-                
-                # Get file info
-                info = await self.get_file_info(sftp, file_path)
-                if not info:
-                    continue
-                
-                # Skip directories
-                if info["type"] == "directory":
-                    if recursive:
-                        # Search recursively
-                        sub_files = await self.find_csv_files(
-                            host, port, username, file_path, pattern, recursive,
-                            password, key_path, min_size, max_age, min_age
-                        )
-                        result.extend(sub_files)
-                    continue
-                
-                # Apply filters
-                if min_size is not None and info["size"] < min_size:
-                    continue
+            chunks = []
+            async with self._sftp_client.open(remote_path, 'rb') as f:
+                while True:
+                    chunk = await f.read(chunk_size)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
                     
-                if max_age is not None and info["mtime"] < max_age:
-                    continue
-                    
-                if min_age is not None and info["mtime"] > min_age:
-                    continue
-                
-                # Add file information
-                result.append({
-                    "filename": filename,
-                    "path": file_path,
-                    "size": info["size"],
-                    "mtime": info["mtime"]
-                })
-            
-            # Sort by modification time (newest first)
-            result.sort(key=lambda x: x["mtime"], reverse=True)
-            
-            return result
+            logger.info(f"Read {remote_path} by chunks ({len(chunks)} chunks)")
+            return chunks
             
         except Exception as e:
-            logger.error(f"Error finding CSV files on {username}@{host}:{port}: {str(e)}")
-            return []
-    
-    async def download_csv_files(self,
-                               host: str,
-                               port: int,
-                               username: str,
-                               files: List[Dict[str, Any]],
-                               dest_dir: str,
-                               password: Optional[str] = None,
-                               key_path: Optional[str] = None,
-                               max_concurrent: int = 3) -> List[str]:
-        """Download CSV files from SFTP server
+            logger.error(f"Failed to read file {remote_path} by chunks: {e}")
+            return None
+            
+    async def find_files_by_pattern(self, directory: str, pattern: str, recursive: bool = False, max_depth: int = 5) -> List[str]:
+        """Find files by pattern
         
         Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            files: List of file information dictionaries
-            dest_dir: Destination directory
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
-            max_concurrent: Maximum concurrent downloads (default: 3)
+            directory: Directory to search
+            pattern: Regular expression pattern for filenames
+            recursive: Whether to search recursively
+            max_depth: Maximum recursion depth
             
         Returns:
-            List[str]: List of downloaded file paths
+            List of matching file paths
         """
-        if not files:
-            return []
+        await self.ensure_connected()
+        
+        result = []
+        pattern_re = re.compile(pattern)
+        
+        await self._find_files_recursive(directory, pattern_re, result, recursive, max_depth, 0)
+        
+        return result
+        
+    async def _find_files_recursive(self, directory: str, pattern_re: re.Pattern, result: List[str], recursive: bool, max_depth: int, current_depth: int):
+        """Recursively find files by pattern
+        
+        Args:
+            directory: Directory to search
+            pattern_re: Compiled regular expression pattern
+            result: List to add results to
+            recursive: Whether to search recursively
+            max_depth: Maximum recursion depth
+            current_depth: Current recursion depth
+        """
+        if current_depth > max_depth:
+            return
             
-        # Create destination directory if it doesn't exist
-        os.makedirs(dest_dir, exist_ok=True)
-        
-        # Get SFTP connection
-        sftp = await self.get_connection(host, port, username, password, key_path)
-        if not sftp:
-            logger.error(f"Failed to connect to SFTP server {username}@{host}:{port}")
-            return []
-        
-        # Create semaphore for limiting concurrent downloads
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        # Define download coroutine
-        async def download_file(file_info):
-            async with semaphore:
+        try:
+            entries = await self._sftp_client.listdir(directory)
+            
+            for entry in entries:
+                entry_path = f"{directory}/{entry}"
+                
                 try:
-                    # Read file contents
-                    data = await self.read_file(sftp, file_info["path"])
-                    if not data:
-                        return None
-                        
-                    # Create destination file path
-                    dest_path = os.path.join(dest_dir, file_info["filename"])
+                    entry_info = await self.get_file_info(entry_path)
                     
-                    # Write file to disk
-                    with open(dest_path, "wb") as f:
-                        f.write(data)
+                    if not entry_info:
+                        continue
                         
-                    logger.info(f"Downloaded {file_info['path']} to {dest_path}")
-                    return dest_path
-                    
+                    if entry_info["is_file"] and pattern_re.search(entry):
+                        result.append(entry_path)
+                        
+                    elif entry_info["is_dir"] and recursive:
+                        await self._find_files_recursive(entry_path, pattern_re, result, recursive, max_depth, current_depth + 1)
+                        
                 except Exception as e:
-                    logger.error(f"Error downloading file {file_info['path']}: {str(e)}")
-                    return None
-        
-        # Download files concurrently
-        results = await asyncio.gather(*[download_file(file) for file in files])
-        
-        # Filter out failed downloads
-        return [path for path in results if path]
-    
-    async def process_latest_csv(self,
-                              host: str,
-                              port: int,
-                              username: str,
-                              base_path: str,
-                              processor: callable,
-                              pattern: Optional[str] = None,
-                              password: Optional[str] = None,
-                              key_path: Optional[str] = None,
-                              max_age: Optional[timedelta] = None,
-                              min_size: int = 100) -> Optional[Dict[str, Any]]:
-        """Process latest CSV file from SFTP server
+                    logger.warning(f"Error processing entry {entry_path}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Failed to list directory {directory}: {e}")
+            
+    async def find_csv_files(
+        self, 
+        directory: str, 
+        date_range: Optional[Tuple[datetime, datetime]] = None,
+        recursive: bool = True,
+        max_depth: int = 5
+    ) -> List[str]:
+        """Find CSV files in directory
         
         Args:
-            host: SFTP server hostname
-            port: SFTP server port
-            username: SFTP username
-            base_path: Base directory path
-            processor: Function to process CSV data
-            pattern: File pattern regex (default: None)
-            password: SFTP password (default: None)
-            key_path: Path to private key file (default: None)
-            max_age: Maximum file age (default: None)
-            min_size: Minimum file size (default: 100)
+            directory: Directory to search
+            date_range: Optional tuple of (start_date, end_date) to filter by filename date
+            recursive: Whether to search recursively
+            max_depth: Maximum recursion depth
             
         Returns:
-            Dict or None: Processing result or None if error
+            List of CSV file paths
         """
-        # Get SFTP connection
-        sftp = await self.get_connection(host, port, username, password, key_path)
-        if not sftp:
-            logger.error(f"Failed to connect to SFTP server {username}@{host}:{port}")
-            return None
+        # Find all CSV files
+        csv_files = await self.find_files_by_pattern(directory, r'\.csv$', recursive, max_depth)
         
+        # Filter by date range if provided
+        if date_range:
+            start_date, end_date = date_range
+            filtered_files = []
+            
+            for file_path in csv_files:
+                # Extract date from filename using common patterns
+                file_name = os.path.basename(file_path)
+                date_match = re.search(r'(\d{4}[.-]\d{2}[.-]\d{2})', file_name)
+                
+                if date_match:
+                    date_str = date_match.group(1)
+                    try:
+                        # Try to parse date from filename
+                        if '-' in date_str:
+                            file_date = datetime.strptime(date_str, '%Y-%m-%d')
+                        else:
+                            file_date = datetime.strptime(date_str, '%Y.%m.%d')
+                            
+                        # Check if date is within range
+                        if start_date <= file_date <= end_date:
+                            filtered_files.append(file_path)
+                            
+                    except Exception:
+                        # If date parsing fails, include the file
+                        filtered_files.append(file_path)
+                else:
+                    # If no date found in filename, include the file
+                    filtered_files.append(file_path)
+                    
+            csv_files = filtered_files
+            
+        return csv_files
+        
+    async def read_csv_lines(self, remote_path: str, encoding: str = 'utf-8') -> List[str]:
+        """Read CSV file lines
+        
+        Args:
+            remote_path: Remote file path
+            encoding: File encoding
+            
+        Returns:
+            List of lines
+        """
+        content = await self.download_file(remote_path)
+        
+        if not content:
+            return []
+            
         try:
-            # Find CSV files
-            files = await self.find_csv_files(
-                host, port, username, base_path, pattern, False,
-                password, key_path, min_size,
-                datetime.utcnow() - max_age if max_age else None, None
-            )
-            
-            if not files:
-                logger.warning(f"No CSV files found on {username}@{host}:{port}:{base_path}")
-                return None
-                
-            # Get latest file
-            latest_file = files[0]
-            
-            # Read file contents
-            data = await self.read_file(sftp, latest_file["path"])
-            if not data:
-                logger.error(f"Failed to read file {latest_file['path']}")
-                return None
-                
-            # Process CSV data
-            result = await processor(data, latest_file)
-            
-            return {
-                "file": latest_file,
-                "result": result
-            }
-            
+            text = content.decode(encoding)
+            lines = text.splitlines()
+            return lines
+        except UnicodeDecodeError:
+            # Try with different encodings
+            try:
+                text = content.decode('latin-1')
+                lines = text.splitlines()
+                return lines
+            except Exception as e:
+                logger.error(f"Failed to decode file {remote_path}: {e}")
+                return []
         except Exception as e:
-            logger.error(f"Error processing CSV file on {username}@{host}:{port}: {str(e)}")
-            return None
-
-# Global SFTP manager instance
-_sftp_manager = SFTPManager()
-
-async def get_sftp_manager() -> SFTPManager:
-    """Get the SFTP manager instance
-    
-    Returns:
-        SFTPManager: SFTP manager
-    """
-    return _sftp_manager
-
-async def close_sftp_connections() -> int:
-    """Close all SFTP connections
-    
-    Returns:
-        int: Number of closed connections
-    """
-    return await _sftp_manager.close_all_connections()
+            logger.error(f"Failed to process file {remote_path}: {e}")
+            return []

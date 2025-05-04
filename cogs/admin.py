@@ -34,19 +34,20 @@ class Admin(commands.Cog):
         """Set the admin role for server management"""
         try:
             # Get guild model for themed embed
-            guild_data = None
             guild_model = None
             try:
-                guild_data = await self.bot.db.guilds.find_one({"guild_id": ctx.guild.id})
-                if guild_data:
-                    guild_model = Guild(self.bot.db, guild_data)
+                guild_model = await Guild.get_by_guild_id(self.bot.db, str(ctx.guild.id))
             except Exception as e:
                 logger.warning(f"Error getting guild model: {e}")
 
             # Get guild data
-            guild = await Guild.get_by_id(self.bot.db, ctx.guild.id)
+            guild = await Guild.get_by_guild_id(self.bot.db, str(ctx.guild.id))
             if not guild:
-                guild = await Guild.create(self.bot.db, ctx.guild.id, ctx.guild.name)
+                guild = Guild(
+                    guild_id=str(ctx.guild.id),
+                    name=ctx.guild.name
+                )
+                await self.bot.db.guilds.insert_one(guild.to_document())
             
             # Set admin role
             await guild.set_admin_role(role.id)
@@ -77,12 +78,9 @@ class Admin(commands.Cog):
         
         try:
             # Get guild model for themed embed
-            guild_data = None
             guild_model = None
             try:
-                guild_data = await self.bot.db.guilds.find_one({"guild_id": ctx.guild.id})
-                if guild_data:
-                    guild_model = Guild(self.bot.db, guild_data)
+                guild_model = await Guild.get_by_guild_id(self.bot.db, str(ctx.guild.id))
             except Exception as e:
                 logger.warning(f"Error getting guild model: {e}")
 
@@ -104,33 +102,39 @@ class Admin(commands.Cog):
                 await ctx.send(embed=embed)
                 return
             
-            # Convert guild ID to int
-            try:
-                guild_id_int = int(guild_id)
-            except ValueError:
-                embed = EmbedBuilder.create_error_embed(
-                    "Invalid Guild ID",
-                    "Guild ID must be a valid integer."
-                , guild=guild_model)
-                await ctx.send(embed=embed)
-                return
-            
             # Get guild data
-            guild = await Guild.get_by_id(self.bot.db, guild_id_int)
-            if not guild:
-                embed = EmbedBuilder.create_error_embed(
-                    "Guild Not Found",
-                    f"Could not find a guild with ID {guild_id}."
-                , guild=guild_model)
-                await ctx.send(embed=embed)
-                return
+            target_guild = await Guild.get_by_guild_id(self.bot.db, guild_id)
+            if not target_guild:
+                # Create the guild if it doesn't exist
+                try:
+                    # Try to get Discord guild object for name
+                    bot_guild = self.bot.get_guild(int(guild_id))
+                    guild_name = bot_guild.name if bot_guild else f"Guild {guild_id}"
+                    
+                    # Create new guild
+                    target_guild = Guild(
+                        guild_id=guild_id,
+                        name=guild_name
+                    )
+                    await self.bot.db.guilds.insert_one(target_guild.to_document())
+                except Exception as e:
+                    logger.error(f"Error creating guild: {e}", exc_info=True)
+                    embed = EmbedBuilder.create_error_embed(
+                        "Guild Creation Failed",
+                        f"Could not create a guild with ID {guild_id}: {e}"
+                    , guild=guild_model)
+                    await ctx.send(embed=embed)
+                    return
             
             # Set premium tier
-            await guild.set_premium_tier(tier)
+            await target_guild.set_premium_tier(self.bot.db, tier)
             
             # Get guild name from bot
-            bot_guild = self.bot.get_guild(guild_id_int)
-            guild_name = bot_guild.name if bot_guild else f"Guild {guild_id}"
+            try:
+                bot_guild = self.bot.get_guild(int(guild_id))
+                guild_name = bot_guild.name if bot_guild else target_guild.name or f"Guild {guild_id}"
+            except:
+                guild_name = target_guild.name or f"Guild {guild_id}"
             
             # Send success message
             embed = EmbedBuilder.create_success_embed(
@@ -153,33 +157,27 @@ class Admin(commands.Cog):
         
         try:
             # Get guild model for themed embed
-            guild_data = None
             guild_model = None
             try:
-                guild_data = await self.bot.db.guilds.find_one({"guild_id": ctx.guild.id})
-                if guild_data:
-                    guild_model = Guild(self.bot.db, guild_data)
+                guild_model = await Guild.get_by_guild_id(self.bot.db, str(ctx.guild.id))
             except Exception as e:
                 logger.warning(f"Error getting guild model: {e}")
 
             # Get basic statistics
             guild_count = len(self.bot.guilds)
             
-            # Count servers across all guilds
+            # Count servers and players
             server_count = 0
             player_count = 0
             kill_count = 0
             
-            pipeline = [
-                {"$unwind": "$servers"},
-                {"$count": "server_count"}
-            ]
-            server_result = await self.bot.db.guilds.aggregate(pipeline).to_list(length=1)
-            if server_result:
-                server_count = server_result[0].get("server_count", 0)
-            
-            player_count = await self.bot.db.players.count_documents({})
-            kill_count = await self.bot.db.kills.count_documents({})
+            try:
+                # Use model count methods
+                server_count = await self.bot.db.game_servers.count_documents({})
+                player_count = await self.bot.db.players.count_documents({})
+                kill_count = await self.bot.db.kills.count_documents({})
+            except Exception as e:
+                logger.warning(f"Error counting documents: {e}")
             
             # Create embed
             embed = EmbedBuilder.create_base_embed(
@@ -206,7 +204,7 @@ class Admin(commands.Cog):
                 )
             
             # Add background tasks info
-            task_count = len(self.bot.background_tasks)
+            task_count = len(self.bot.background_tasks) if hasattr(self.bot, "background_tasks") else 0
             embed.add_field(name="Background Tasks", value=str(task_count), inline=True)
             
             # Send embed

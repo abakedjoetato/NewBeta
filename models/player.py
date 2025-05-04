@@ -1,497 +1,266 @@
 """
-Player model for database operations
+Player model for Tower of Temptation PvP Statistics Bot
+
+This module defines the Player data structure for game players.
 """
 import logging
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional, ClassVar, List
+
+from models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 
-class Player:
-    """Player model for database operations"""
+class Player(BaseModel):
+    """Game player data"""
+    collection_name: ClassVar[str] = "players"
     
-    def __init__(self, db, player_data):
-        """Initialize player model"""
-        self.db = db
-        self.data = player_data
-        self.id = player_data.get("player_id")
-        self.name = player_data.get("player_name")
-        self.server_id = player_data.get("server_id")
-        self.kills = player_data.get("kills", 0)
-        self.deaths = player_data.get("deaths", 0)
-        self.suicides = player_data.get("suicides", 0)
-        self.weapons = player_data.get("weapons", {})
-        self.victims = player_data.get("victims", {})
-        self.killers = player_data.get("killers", {})
-        self.longest_shot = player_data.get("longest_shot", 0)
-        self.highest_killstreak = player_data.get("highest_killstreak", 0)
-        self.highest_deathstreak = player_data.get("highest_deathstreak", 0)
-        self.current_streak = player_data.get("current_streak", 0)
-        self.active = player_data.get("active", True)
-        self.first_seen = player_data.get("first_seen")
-        self.last_seen = player_data.get("last_seen")
-        self.updated_at = player_data.get("updated_at")
-        # Added for faction integration
-        self.faction_id = player_data.get("faction_id")
-        # Added for player linking
-        self.discord_id = player_data.get("discord_id")
-        # Added for hourly rivalry tracking
-        self.rivalries = player_data.get("rivalries", {})
-    
-    @classmethod
-    async def get_by_id(cls, db, player_id: str, server_id: str) -> Optional['Player']:
-        """Get a player by ID"""
-        player_data = await db.players.find_one({
-            "player_id": player_id,
-            "server_id": server_id
-        })
+    def __init__(
+        self,
+        player_id: Optional[str] = None,
+        server_id: Optional[str] = None,
+        name: Optional[str] = None,
+        kills: int = 0,
+        deaths: int = 0,
+        suicides: int = 0,
+        display_name: Optional[str] = None,
+        last_seen: Optional[datetime] = None,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+        **kwargs
+    ):
+        self._id = None
+        self.player_id = player_id
+        self.server_id = server_id
+        self.name = name
+        self.kills = kills
+        self.deaths = deaths
+        self.suicides = suicides
+        self.display_name = display_name or name
+        self.last_seen = last_seen
+        self.created_at = created_at or datetime.utcnow()
+        self.updated_at = updated_at or datetime.utcnow()
         
-        if not player_data:
-            return None
+        # Optional player metadata
+        self.faction = kwargs.get("faction")
+        self.rank = kwargs.get("rank")
+        self.score = kwargs.get("score", 0)
+        self.longest_kill_distance = kwargs.get("longest_kill_distance", 0)
+        self.total_kill_distance = kwargs.get("total_kill_distance", 0)
+        self.favorite_weapon = kwargs.get("favorite_weapon")
+        self.nemesis_id = kwargs.get("nemesis_id")
+        self.nemesis_name = kwargs.get("nemesis_name")
+        self.prey_id = kwargs.get("prey_id")
+        self.prey_name = kwargs.get("prey_name")
         
-        return cls(db, player_data)
-    
-    @classmethod
-    async def get_by_name(cls, db, player_name: str, server_id: str) -> List['Player']:
-        """Get players by name (case-insensitive)"""
-        cursor = db.players.find({
-            "player_name": {"$regex": f"^{player_name}$", "$options": "i"},
-            "server_id": server_id,
-            "active": True
-        })
-        
-        players = await cursor.to_list(length=None)
-        
-        return [cls(db, player_data) for player_data in players]
-    
-    @classmethod
-    async def create_or_update(cls, db, player_data: Dict[str, Any]) -> 'Player':
-        """Create or update a player"""
-        # Required fields
-        required_fields = ["player_id", "player_name", "server_id"]
-        for field in required_fields:
-            if field not in player_data:
-                raise ValueError(f"Missing required field: {field}")
-        
-        # Check if player exists
-        player_id = player_data["player_id"]
-        server_id = player_data["server_id"]
-        
-        existing_player = await cls.get_by_id(db, player_id, server_id)
-        
-        if existing_player:
-            # Update player
-            await existing_player.update(player_data)
-            return existing_player
-        else:
-            # Create new player
-            # Set timestamps
-            now = datetime.utcnow().isoformat()
-            player_data.setdefault("first_seen", now)
-            player_data.setdefault("last_seen", now)
-            player_data.setdefault("updated_at", now)
-            
-            # Set default values
-            player_data.setdefault("kills", 0)
-            player_data.setdefault("deaths", 0)
-            player_data.setdefault("suicides", 0)
-            player_data.setdefault("weapons", {})
-            player_data.setdefault("victims", {})
-            player_data.setdefault("killers", {})
-            player_data.setdefault("longest_shot", 0)
-            player_data.setdefault("highest_killstreak", 0)
-            player_data.setdefault("highest_deathstreak", 0)
-            player_data.setdefault("current_streak", 0)
-            player_data.setdefault("active", True)
-            # Default values for new integration
-            player_data.setdefault("faction_id", None)
-            player_data.setdefault("discord_id", None)
-            
-            # Insert player
-            await db.players.insert_one(player_data)
-            
-            return cls(db, player_data)
-    
-    async def update(self, update_data: Dict[str, Any]) -> bool:
-        """Update player data"""
-        # Set updated timestamp
-        now = datetime.utcnow().isoformat()
-        update_data["updated_at"] = now
-        update_data.setdefault("last_seen", now)
-        
-        # Update player
-        result = await self.db.players.update_one(
-            {
-                "player_id": self.id,
-                "server_id": self.server_id
-            },
-            {"$set": update_data}
-        )
-        
-        # Update local data
-        if result.modified_count > 0:
-            for key, value in update_data.items():
+        # Add any additional player attributes
+        for key, value in kwargs.items():
+            if not hasattr(self, key):
                 setattr(self, key, value)
-                self.data[key] = value
-            return True
-        
-        return False
-    
-    async def record_kill(self, victim_id: str, victim_name: str, weapon: str, distance: int = 0) -> bool:
-        """Record a kill for this player"""
-        # Update kills count
-        update_data = {
-            "kills": self.kills + 1,
-            "last_seen": datetime.utcnow().isoformat()
-        }
-        
-        # Update weapons dictionary
-        weapons = self.weapons.copy()
-        weapons[weapon] = weapons.get(weapon, 0) + 1
-        update_data["weapons"] = weapons
-        
-        # Update victims dictionary
-        victims = self.victims.copy()
-        victims[victim_id] = {
-            "name": victim_name,
-            "count": victims.get(victim_id, {}).get("count", 0) + 1
-        }
-        update_data["victims"] = victims
-        
-        # Update streak
-        current_streak = self.current_streak
-        if current_streak < 0:
-            # Was on a death streak, now reset
-            current_streak = 1
-        else:
-            # Continue or start kill streak
-            current_streak += 1
-        
-        update_data["current_streak"] = current_streak
-        
-        # Update highest kill streak if needed
-        if current_streak > self.highest_killstreak:
-            update_data["highest_killstreak"] = current_streak
-        
-        # Update longest shot if needed
-        if distance > self.longest_shot:
-            update_data["longest_shot"] = distance
-        
-        # Update player
-        return await self.update(update_data)
-    
-    async def record_death(self, killer_id: str, killer_name: str) -> bool:
-        """Record a death for this player"""
-        # Update deaths count
-        update_data = {
-            "deaths": self.deaths + 1,
-            "last_seen": datetime.utcnow().isoformat()
-        }
-        
-        # Update killers dictionary
-        killers = self.killers.copy()
-        killers[killer_id] = {
-            "name": killer_name,
-            "count": killers.get(killer_id, {}).get("count", 0) + 1
-        }
-        update_data["killers"] = killers
-        
-        # Update streak
-        current_streak = self.current_streak
-        if current_streak > 0:
-            # Was on a kill streak, now reset
-            current_streak = -1
-        else:
-            # Continue or start death streak
-            current_streak -= 1
-        
-        update_data["current_streak"] = current_streak
-        
-        # Update highest death streak if needed
-        if abs(current_streak) > self.highest_deathstreak and current_streak < 0:
-            update_data["highest_deathstreak"] = abs(current_streak)
-        
-        # Update player
-        return await self.update(update_data)
-    
-    async def record_suicide(self, suicide_type: str = "other") -> bool:
-        """Record a suicide for this player"""
-        # Update suicides count and deaths count
-        update_data = {
-            "suicides": self.suicides + 1,
-            "deaths": self.deaths + 1,
-            "last_seen": datetime.utcnow().isoformat()
-        }
-        
-        # Update streak (suicides count as deaths for streaks)
-        current_streak = self.current_streak
-        if current_streak > 0:
-            # Was on a kill streak, now reset
-            current_streak = -1
-        else:
-            # Continue or start death streak
-            current_streak -= 1
-        
-        update_data["current_streak"] = current_streak
-        
-        # Update highest death streak if needed
-        if abs(current_streak) > self.highest_deathstreak and current_streak < 0:
-            update_data["highest_deathstreak"] = abs(current_streak)
-        
-        # Update player
-        return await self.update(update_data)
-    
-    async def get_nemesis(self) -> Optional[Dict[str, Any]]:
-        """Get the player's nemesis (player who killed them the most)"""
-        if not self.killers:
-            return None
-        
-        # Find killer with highest count
-        nemesis_id = None
-        nemesis_count = 0
-        
-        for killer_id, data in self.killers.items():
-            count = data.get("count", 0)
-            if count > nemesis_count:
-                nemesis_id = killer_id
-                nemesis_count = count
-        
-        if not nemesis_id:
-            return None
-        
-        # Get nemesis data
-        nemesis_data = self.killers[nemesis_id]
-        
-        return {
-            "player_id": nemesis_id,
-            "player_name": nemesis_data["name"],
-            "kill_count": nemesis_count
-        }
-    
-    async def get_favorite_victim(self) -> Optional[Dict[str, Any]]:
-        """Get the player's favorite victim (player they killed the most)"""
-        if not self.victims:
-            return None
-        
-        # Find victim with highest count
-        victim_id = None
-        victim_count = 0
-        
-        for vid, data in self.victims.items():
-            count = data.get("count", 0)
-            if count > victim_count:
-                victim_id = vid
-                victim_count = count
-        
-        if not victim_id:
-            return None
-        
-        # Get victim data
-        victim_data = self.victims[victim_id]
-        
-        return {
-            "player_id": victim_id,
-            "player_name": victim_data["name"],
-            "kill_count": victim_count
-        }
-    
-    async def get_favorite_weapon(self) -> Optional[Dict[str, Any]]:
-        """Get the player's favorite weapon (weapon they used the most)"""
-        if not self.weapons:
-            return None
-        
-        # Find weapon with highest count
-        weapon_name = None
-        weapon_count = 0
-        
-        for name, count in self.weapons.items():
-            if count > weapon_count:
-                weapon_name = name
-                weapon_count = count
-        
-        if not weapon_name:
-            return None
-        
-        return {
-            "weapon": weapon_name,
-            "kill_count": weapon_count
-        }
-    
-    async def get_detailed_stats(self) -> Dict[str, Any]:
-        """Get detailed stats for this player"""
-        # Calculate K/D ratio
-        kdr = self.kills / max(self.deaths, 1)
-        
-        # Check if we have updated rivalry data first (from hourly tracking)
-        nemesis = None
-        favorite_victim = None
-        
-        # Use hourly tracked rivalries if available
-        rivalry_last_updated = None
-        if self.rivalries and isinstance(self.rivalries, dict):
-            # Track when the rivalries were last updated
-            if "last_updated" in self.rivalries:
-                rivalry_last_updated = self.rivalries["last_updated"]
-                
-            # Get nemesis data
-            if "nemesis" in self.rivalries:
-                nemesis = self.rivalries["nemesis"]
-            
-            # Get prey data (favorite victim)
-            if "prey" in self.rivalries:
-                favorite_victim = self.rivalries["prey"]
-        
-        # Fall back to legacy methods if hourly data not available
-        if not nemesis:
-            nemesis = await self.get_nemesis()
-            
-        if not favorite_victim:    
-            favorite_victim = await self.get_favorite_victim()
-        
-        # Get favorite weapon
-        favorite_weapon = await self.get_favorite_weapon()
-        
-        # Get advanced weapon stats
-        from utils.weapon_stats import analyze_player_weapon_stats
-        weapon_analysis = analyze_player_weapon_stats(self.weapons)
-        
-        # Compile stats (exclude player_id from being shown in UI)
-        stats = {
-            "player_name": self.name,
-            "server_id": self.server_id,
-            "kills": self.kills,
-            "deaths": self.deaths,
-            "suicides": self.suicides,
-            "kdr": round(kdr, 2),
-            "longest_shot": self.longest_shot,
-            "highest_killstreak": self.highest_killstreak,
-            "highest_deathstreak": self.highest_deathstreak,
-            "current_streak": self.current_streak,
-            "nemesis": nemesis,
-            "favorite_victim": favorite_victim,
-            "favorite_weapon": favorite_weapon,
-            "weapon_categories": weapon_analysis.get("category_breakdown", {}),
-            "most_used_category": weapon_analysis.get("most_used_category"),
-            "melee_percentage": weapon_analysis.get("melee_percentage", 0),
-            "combat_kills": weapon_analysis.get("combat_kills", 0),
-            "weapons": self.weapons,  # Keep all weapon data for detailed stats
-            "first_seen": self.first_seen,
-            "last_seen": self.last_seen,
-            # Added for new features
-            "faction_id": self.faction_id,
-            "discord_id": self.discord_id,
-            # Rivalry tracking info
-            "rivalries_last_updated": rivalry_last_updated
-        }
-        
-        return stats
-    
-    async def set_faction(self, faction_id: Optional[str]) -> bool:
-        """Set player's faction
-        
-        Args:
-            faction_id: Faction ID or None to remove faction
-            
-        Returns:
-            bool: True if successful
-        """
-        update_data = {"faction_id": faction_id}
-        return await self.update(update_data)
-    
-    async def set_discord_id(self, discord_id: Optional[str]) -> bool:
-        """Link player to Discord user
-        
-        Args:
-            discord_id: Discord user ID or None to unlink
-            
-        Returns:
-            bool: True if successful
-        """
-        update_data = {"discord_id": discord_id}
-        return await self.update(update_data)
     
     @classmethod
-    async def get_by_discord_id(cls, db, discord_id: str) -> List['Player']:
-        """Get players linked to a Discord user
+    async def get_by_player_id(cls, db, player_id: str) -> Optional['Player']:
+        """Get a player by player_id
         
         Args:
             db: Database connection
-            discord_id: Discord user ID
+            player_id: Player ID
             
         Returns:
-            List[Player]: List of players
+            Player object or None if not found
         """
-        cursor = db.players.find({
-            "discord_id": discord_id,
-            "active": True
-        })
-        
-        players = await cursor.to_list(length=None)
-        
-        return [cls(db, player_data) for player_data in players]
+        document = await db.players.find_one({"player_id": player_id})
+        return cls.from_document(document) if document else None
     
     @classmethod
-    async def get_leaderboard(cls, db, server_id: str, stat: str = "kills", limit: int = 10) -> List[Dict[str, Any]]:
-        """Get a leaderboard for a specific stat"""
-        valid_stats = ["kills", "deaths", "suicides", "kdr", "longest_shot", 
-                        "highest_killstreak", "highest_deathstreak"]
+    async def get_by_name(cls, db, name: str, server_id: Optional[str] = None) -> Optional['Player']:
+        """Get a player by name
         
-        if stat not in valid_stats:
-            logger.error(f"Invalid stat for leaderboard: {stat}")
-            return []
+        Args:
+            db: Database connection
+            name: Player name
+            server_id: Optional server ID to filter by
+            
+        Returns:
+            Player object or None if not found
+        """
+        query = {"name": name}
+        if server_id:
+            query["server_id"] = server_id
+            
+        document = await db.players.find_one(query)
+        return cls.from_document(document) if document else None
+    
+    @classmethod
+    async def get_players_for_server(cls, db, server_id: str) -> List['Player']:
+        """Get all players for a server
         
-        # Special case for KDR
-        if stat == "kdr":
-            # Get all active players
-            cursor = db.players.find({
-                "server_id": server_id,
-                "active": True,
-                "kills": {"$gt": 0}  # Only include players with kills
-            })
+        Args:
+            db: Database connection
+            server_id: Server ID
             
-            players = await cursor.to_list(length=None)
-            
-            # Calculate KDR for each player
-            for player in players:
-                player["kdr"] = round(player["kills"] / max(player["deaths"], 1), 2)
-            
-            # Sort by KDR
-            players.sort(key=lambda x: x["kdr"], reverse=True)
-            
-            # Limit results
-            players = players[:limit]
-            
-            return [{
-                "player_id": p["player_id"],
-                "player_name": p["player_name"],
-                "value": p["kdr"]
-            } for p in players]
+        Returns:
+            List of Player objects
+        """
+        cursor = db.players.find({"server_id": server_id})
         
-        # All other stats
-        pipeline = [
-            {
-                "$match": {
-                    "server_id": server_id,
-                    "active": True,
-                    stat: {"$gt": 0}  # Only include players with non-zero stat
-                }
-            },
-            {
-                "$sort": {stat: -1}
-            },
-            {
-                "$limit": limit
-            },
-            {
-                "$project": {
-                    "player_id": 1,
-                    "player_name": 1,
-                    "value": f"${stat}"
-                }
-            }
-        ]
+        players = []
+        async for document in cursor:
+            players.append(cls.from_document(document))
+            
+        return players
+    
+    @classmethod
+    async def get_top_players(cls, db, server_id: str, sort_by: str = "kills", limit: int = 10) -> List['Player']:
+        """Get top players for a server
         
-        cursor = db.players.aggregate(pipeline)
-        leaderboard = await cursor.to_list(length=None)
+        Args:
+            db: Database connection
+            server_id: Server ID
+            sort_by: Field to sort by (kills, deaths, kd)
+            limit: Number of players to return
+            
+        Returns:
+            List of Player objects
+        """
+        sort_field = sort_by
+        if sort_by == "kd":
+            # For K/D ratio, we sort by kills and handle the ratio in Python
+            sort_field = "kills"
+            
+        cursor = db.players.find({"server_id": server_id}).sort(sort_field, -1).limit(limit)
         
-        return leaderboard
+        players = []
+        async for document in cursor:
+            players.append(cls.from_document(document))
+            
+        if sort_by == "kd":
+            # Sort by K/D ratio after fetching
+            players.sort(key=lambda p: p.kills / max(p.deaths, 1), reverse=True)
+            
+        return players
+    
+    async def update_stats(
+        self, 
+        db, 
+        kills: Optional[int] = None,
+        deaths: Optional[int] = None,
+        suicides: Optional[int] = None
+    ) -> bool:
+        """Update player statistics
+        
+        Args:
+            db: Database connection
+            kills: Number of kills to add
+            deaths: Number of deaths to add
+            suicides: Number of suicides to add
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        update_dict = {"updated_at": datetime.utcnow()}
+        
+        if kills is not None:
+            self.kills += kills
+            update_dict["kills"] = self.kills
+        
+        if deaths is not None:
+            self.deaths += deaths
+            update_dict["deaths"] = self.deaths
+        
+        if suicides is not None:
+            self.suicides += suicides
+            update_dict["suicides"] = self.suicides
+        
+        self.updated_at = update_dict["updated_at"]
+        
+        # Update in database
+        result = await db.players.update_one(
+            {"player_id": self.player_id},
+            {"$set": update_dict}
+        )
+        
+        return result.modified_count > 0
+    
+    async def update_rivalries(
+        self, 
+        db, 
+        nemesis_id: Optional[str] = None,
+        nemesis_name: Optional[str] = None,
+        prey_id: Optional[str] = None,
+        prey_name: Optional[str] = None
+    ) -> bool:
+        """Update player rivalries
+        
+        Args:
+            db: Database connection
+            nemesis_id: Player ID of nemesis (player killed by most)
+            nemesis_name: Name of nemesis
+            prey_id: Player ID of prey (player killed most)
+            prey_name: Name of prey
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        update_dict = {"updated_at": datetime.utcnow()}
+        
+        if nemesis_id is not None:
+            self.nemesis_id = nemesis_id
+            update_dict["nemesis_id"] = nemesis_id
+        
+        if nemesis_name is not None:
+            self.nemesis_name = nemesis_name
+            update_dict["nemesis_name"] = nemesis_name
+        
+        if prey_id is not None:
+            self.prey_id = prey_id
+            update_dict["prey_id"] = prey_id
+        
+        if prey_name is not None:
+            self.prey_name = prey_name
+            update_dict["prey_name"] = prey_name
+        
+        self.updated_at = update_dict["updated_at"]
+        
+        # Update in database
+        result = await db.players.update_one(
+            {"player_id": self.player_id},
+            {"$set": update_dict}
+        )
+        
+        return result.modified_count > 0
+    
+    async def update_last_seen(self, db, last_seen: datetime) -> bool:
+        """Update player's last seen timestamp
+        
+        Args:
+            db: Database connection
+            last_seen: Last seen timestamp
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        self.last_seen = last_seen
+        self.updated_at = datetime.utcnow()
+        
+        # Update in database
+        result = await db.players.update_one(
+            {"player_id": self.player_id},
+            {"$set": {
+                "last_seen": self.last_seen,
+                "updated_at": self.updated_at
+            }}
+        )
+        
+        return result.modified_count > 0
+    
+    @property
+    def kd_ratio(self) -> float:
+        """Calculate K/D ratio
+        
+        Returns:
+            K/D ratio (kills / deaths, with deaths=1 if deaths=0)
+        """
+        if self.deaths == 0:
+            return self.kills
+        return self.kills / self.deaths

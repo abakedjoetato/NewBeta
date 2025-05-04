@@ -1,475 +1,215 @@
 """
-Database Manager for the Tower of Temptation PvP Statistics Discord Bot.
+Database connection manager for Tower of Temptation PvP Statistics Bot
 
-This module provides:
-1. MongoDB connection management
-2. Connection pooling
-3. Database operations
-4. Caching
+This module provides a unified interface for MongoDB database connections
+and handles connection pooling, reconnection logic, and error handling.
 """
-import os
 import logging
+import os
 import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Set, Tuple
-
 import motor.motor_asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
-import pymongo.errors
-from pymongo import IndexModel, ASCENDING, DESCENDING
-
-from utils.async_utils import retryable
+from typing import Optional, Dict, Any, List, Union
+from datetime import datetime
+from bson.objectid import ObjectId
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """MongoDB database manager"""
+    """MongoDB database connection manager"""
     
-    def __init__(self, uri: str, db_name: str):
+    def __init__(self, connection_string: Optional[str] = None, db_name: Optional[str] = None):
         """Initialize database manager
         
         Args:
-            uri: MongoDB connection URI
-            db_name: Database name
+            connection_string: MongoDB connection string (defaults to MONGODB_URI env var)
+            db_name: MongoDB database name (extracted from connection string if not provided)
         """
-        self.uri = uri
+        # Get connection string from env var if not provided
+        self.connection_string = connection_string or os.environ.get("MONGODB_URI")
+        if not self.connection_string:
+            raise ValueError("MongoDB connection string not provided and MONGODB_URI env var not set")
+            
+        # Get database name from connection string if not provided
+        if not db_name:
+            # Extract database name from connection string (after last / and before ?)
+            parts = self.connection_string.split("/")
+            if len(parts) > 3:
+                db_name_part = parts[3].split("?")[0]
+                db_name = db_name_part if db_name_part else "tower_of_temptation"
+            else:
+                db_name = "tower_of_temptation"
+        
         self.db_name = db_name
-        self.client: Optional[AsyncIOMotorClient] = None
-        self.db = None
-        self._lock = asyncio.Lock()
+        self._client = None
+        self._db = None
         self._connected = False
-        self._collections: Dict[str, Any] = {}
+        self._connection_attempts = 0
+        self._max_connection_attempts = 5
+        self._reconnection_delay = 1  # Starting delay in seconds
     
     async def connect(self) -> bool:
         """Connect to MongoDB database
         
         Returns:
-            bool: True if connected successfully
+            True if connected successfully, False otherwise
         """
-        if self._connected and self.client and not self.client.io_loop.is_closed():
+        if self._connected and self._client and self._db:
             return True
             
-        async with self._lock:
-            # Check again inside lock
-            if self._connected and self.client and not self.client.io_loop.is_closed():
-                return True
-                
-            try:
-                # Create client
-                logger.info(f"Connecting to MongoDB at {self.uri}")
-                self.client = AsyncIOMotorClient(self.uri)
-                
-                # Test connection
-                await self.client.admin.command("ping")
-                
-                # Get database
-                self.db = self.client[self.db_name]
-                
-                self._connected = True
-                logger.info(f"Connected to MongoDB database {self.db_name}")
-                
-                return True
-                
-            except Exception as e:
-                logger.error(f"Error connecting to MongoDB: {str(e)}")
-                self._connected = False
-                if self.client:
-                    self.client.close()
-                    self.client = None
-                self.db = None
-                return False
-    
-    async def disconnect(self) -> None:
-        """Disconnect from MongoDB database"""
-        if self.client:
-            self.client.close()
-            self.client = None
+        try:
+            # Create client and connect
+            self._client = motor.motor_asyncio.AsyncIOMotorClient(
+                self.connection_string,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000
+            )
             
-        self._connected = False
-        self.db = None
-        logger.info("Disconnected from MongoDB")
-    
-    async def _ensure_connected(self) -> bool:
-        """Ensure database connection is established
-        
-        Returns:
-            bool: True if connected
-        """
-        if not self._connected or not self.client or not self.db:
+            # Test connection
+            await self._client.server_info()
+            
+            # Get database
+            self._db = self._client[self.db_name]
+            
+            self._connected = True
+            self._connection_attempts = 0
+            self._reconnection_delay = 1
+            
+            logger.info(f"Connected to MongoDB database: {self.db_name}")
+            return True
+            
+        except Exception as e:
+            self._connected = False
+            self._connection_attempts += 1
+            
+            logger.error(f"Failed to connect to MongoDB database (attempt {self._connection_attempts}): {e}")
+            
+            if self._connection_attempts >= self._max_connection_attempts:
+                logger.critical("Maximum connection attempts reached. Giving up.")
+                raise RuntimeError(f"Failed to connect to MongoDB after {self._max_connection_attempts} attempts") from e
+                
+            # Exponential backoff for reconnection
+            delay = min(30, self._reconnection_delay * 2)
+            self._reconnection_delay = delay
+            
+            logger.info(f"Retrying connection in {delay} seconds...")
+            await asyncio.sleep(delay)
+            
             return await self.connect()
-            
-        return True
     
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def get_document(self, collection: str, query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Get document from collection
+    async def disconnect(self):
+        """Disconnect from MongoDB database"""
+        if self._client:
+            self._client.close()
+            self._client = None
+            self._db = None
+            self._connected = False
+            logger.info("Disconnected from MongoDB database")
+    
+    async def ensure_connected(self):
+        """Ensure connection to MongoDB database"""
+        if not self._connected or not self._client or not self._db:
+            await self.connect()
+    
+    @property
+    def db(self):
+        """Get database connection
+        
+        Returns:
+            MongoDB database connection
+        """
+        if not self._connected or not self._db:
+            raise RuntimeError("Not connected to MongoDB database")
+            
+        return self._db
+    
+    @property
+    def client(self):
+        """Get client connection
+        
+        Returns:
+            MongoDB client connection
+        """
+        if not self._connected or not self._client:
+            raise RuntimeError("Not connected to MongoDB database")
+            
+        return self._client
+        
+    async def get_collection(self, collection_name: str):
+        """Get collection by name
         
         Args:
-            collection: Collection name
-            query: Query to find document
+            collection_name: Collection name
             
         Returns:
-            Dict or None: Document or None if not found
+            MongoDB collection
         """
-        if not await self._ensure_connected():
-            return None
-            
-        try:
-            result = await self.db[collection].find_one(query)
-            return result
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error getting document from {collection}: {str(e)}")
-            raise
+        await self.ensure_connected()
+        return self._db[collection_name]
     
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def get_documents(self, collection: str, query: Dict[str, Any], sort: Optional[List[Tuple[str, int]]] = None, limit: Optional[int] = None, skip: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Get documents from collection
+    async def create_indexes(self):
+        """Create indexes for all collections"""
+        await self.ensure_connected()
+        
+        # Guild indexes
+        await self._db.guilds.create_index("guild_id", unique=True)
+        
+        # Server indexes
+        await self._db.game_servers.create_index("server_id", unique=True)
+        await self._db.game_servers.create_index("guild_id")
+        
+        # Player indexes
+        await self._db.players.create_index("player_id", unique=True)
+        await self._db.players.create_index("server_id")
+        await self._db.players.create_index("name")
+        await self._db.players.create_index([("server_id", 1), ("name", 1)])
+        
+        # Player link indexes
+        await self._db.player_links.create_index("link_id", unique=True)
+        await self._db.player_links.create_index("player_id")
+        await self._db.player_links.create_index("discord_id")
+        await self._db.player_links.create_index([("player_id", 1), ("status", 1)])
+        await self._db.player_links.create_index([("discord_id", 1), ("status", 1)])
+        
+        # Economy indexes
+        await self._db.economy.create_index("player_id", unique=True)
+        await self._db.economy.create_index("discord_id")
+        
+        # Bounty indexes
+        await self._db.bounties.create_index("bounty_id", unique=True)
+        await self._db.bounties.create_index("target_id")
+        await self._db.bounties.create_index("placed_by_id")
+        await self._db.bounties.create_index("server_id")
+        await self._db.bounties.create_index("status")
+        await self._db.bounties.create_index([("target_id", 1), ("status", 1)])
+        await self._db.bounties.create_index([("expires_at", 1), ("status", 1)])
+        
+        # Kills indexes
+        await self._db.kills.create_index([("server_id", 1), ("timestamp", -1)])
+        await self._db.kills.create_index([("killer_id", 1), ("timestamp", -1)])
+        await self._db.kills.create_index([("victim_id", 1), ("timestamp", -1)])
+        
+        # Historical data indexes
+        await self._db.historical_data.create_index([("server_id", 1), ("date", -1)])
+        await self._db.historical_data.create_index([("server_id", 1), ("player_id", 1), ("date", -1)])
+        
+        logger.info("Created indexes for all collections")
+        
+    async def initialize(self):
+        """Initialize database connection and create indexes"""
+        await self.connect()
+        await self.create_indexes()
+        logger.info("Database initialized successfully")
+        
+    def __getattr__(self, name):
+        """Get collection by attribute name
         
         Args:
-            collection: Collection name
-            query: Query to find documents
-            sort: Sort criteria (default: None)
-            limit: Maximum number of documents to return (default: None)
-            skip: Number of documents to skip (default: None)
+            name: Collection name
             
         Returns:
-            List[Dict]: List of documents
+            MongoDB collection
         """
-        if not await self._ensure_connected():
-            return []
+        if not self._connected or not self._db:
+            raise RuntimeError("Not connected to MongoDB database")
             
-        try:
-            cursor = self.db[collection].find(query)
-            
-            if sort:
-                cursor = cursor.sort(sort)
-                
-            if skip:
-                cursor = cursor.skip(skip)
-                
-            if limit:
-                cursor = cursor.limit(limit)
-                
-            return await cursor.to_list(length=None)
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error getting documents from {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def count_documents(self, collection: str, query: Dict[str, Any]) -> int:
-        """Count documents in collection
-        
-        Args:
-            collection: Collection name
-            query: Query to count documents
-            
-        Returns:
-            int: Number of documents
-        """
-        if not await self._ensure_connected():
-            return 0
-            
-        try:
-            return await self.db[collection].count_documents(query)
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error counting documents in {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def insert_document(self, collection: str, document: Dict[str, Any]) -> Optional[str]:
-        """Insert document into collection
-        
-        Args:
-            collection: Collection name
-            document: Document to insert
-            
-        Returns:
-            str or None: Document ID or None if error
-        """
-        if not await self._ensure_connected():
-            return None
-            
-        try:
-            result = await self.db[collection].insert_one(document)
-            return str(result.inserted_id)
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error inserting document into {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def insert_documents(self, collection: str, documents: List[Dict[str, Any]]) -> Optional[List[str]]:
-        """Insert multiple documents into collection
-        
-        Args:
-            collection: Collection name
-            documents: Documents to insert
-            
-        Returns:
-            List[str] or None: Document IDs or None if error
-        """
-        if not await self._ensure_connected() or not documents:
-            return None
-            
-        try:
-            result = await self.db[collection].insert_many(documents)
-            return [str(id) for id in result.inserted_ids]
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error inserting documents into {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def update_document(self, collection: str, query: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> bool:
-        """Update document in collection
-        
-        Args:
-            collection: Collection name
-            query: Query to find document
-            update: Update operations
-            upsert: Whether to insert if not exists (default: False)
-            
-        Returns:
-            bool: True if successful
-        """
-        if not await self._ensure_connected():
-            return False
-            
-        try:
-            result = await self.db[collection].update_one(query, update, upsert=upsert)
-            return result.modified_count > 0 or (upsert and result.upserted_id is not None)
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error updating document in {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def update_documents(self, collection: str, query: Dict[str, Any], update: Dict[str, Any]) -> int:
-        """Update multiple documents in collection
-        
-        Args:
-            collection: Collection name
-            query: Query to find documents
-            update: Update operations
-            
-        Returns:
-            int: Number of documents updated
-        """
-        if not await self._ensure_connected():
-            return 0
-            
-        try:
-            result = await self.db[collection].update_many(query, update)
-            return result.modified_count
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error updating documents in {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def delete_document(self, collection: str, query: Dict[str, Any]) -> bool:
-        """Delete document from collection
-        
-        Args:
-            collection: Collection name
-            query: Query to find document
-            
-        Returns:
-            bool: True if successful
-        """
-        if not await self._ensure_connected():
-            return False
-            
-        try:
-            result = await self.db[collection].delete_one(query)
-            return result.deleted_count > 0
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error deleting document from {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def delete_documents(self, collection: str, query: Dict[str, Any]) -> int:
-        """Delete multiple documents from collection
-        
-        Args:
-            collection: Collection name
-            query: Query to find documents
-            
-        Returns:
-            int: Number of documents deleted
-        """
-        if not await self._ensure_connected():
-            return 0
-            
-        try:
-            result = await self.db[collection].delete_many(query)
-            return result.deleted_count
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error deleting documents from {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def create_index(self, collection: str, keys: List[Tuple[str, int]], unique: bool = False, name: Optional[str] = None) -> str:
-        """Create index on collection
-        
-        Args:
-            collection: Collection name
-            keys: List of (field, direction) tuples
-            unique: Whether index should be unique (default: False)
-            name: Index name (default: None)
-            
-        Returns:
-            str: Index name
-        """
-        if not await self._ensure_connected():
-            return ""
-            
-        try:
-            result = await self.db[collection].create_index(keys, unique=unique, name=name)
-            return result
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error creating index on {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def create_indexes(self, collection: str, indexes: List[IndexModel]) -> List[str]:
-        """Create multiple indexes on collection
-        
-        Args:
-            collection: Collection name
-            indexes: List of IndexModel instances
-            
-        Returns:
-            List[str]: Index names
-        """
-        if not await self._ensure_connected() or not indexes:
-            return []
-            
-        try:
-            result = await self.db[collection].create_indexes(indexes)
-            return result
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error creating indexes on {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def drop_index(self, collection: str, index_name: str) -> bool:
-        """Drop index from collection
-        
-        Args:
-            collection: Collection name
-            index_name: Index name
-            
-        Returns:
-            bool: True if successful
-        """
-        if not await self._ensure_connected():
-            return False
-            
-        try:
-            await self.db[collection].drop_index(index_name)
-            return True
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error dropping index from {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def drop_indexes(self, collection: str) -> bool:
-        """Drop all indexes from collection
-        
-        Args:
-            collection: Collection name
-            
-        Returns:
-            bool: True if successful
-        """
-        if not await self._ensure_connected():
-            return False
-            
-        try:
-            await self.db[collection].drop_indexes()
-            return True
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error dropping indexes from {collection}: {str(e)}")
-            raise
-    
-    @retryable(max_retries=3, delay=1.0, exceptions=[pymongo.errors.PyMongoError])
-    async def aggregate(self, collection: str, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Run aggregation pipeline on collection
-        
-        Args:
-            collection: Collection name
-            pipeline: Aggregation pipeline
-            
-        Returns:
-            List[Dict]: Aggregation results
-        """
-        if not await self._ensure_connected():
-            return []
-            
-        try:
-            cursor = self.db[collection].aggregate(pipeline)
-            return await cursor.to_list(length=None)
-            
-        except pymongo.errors.PyMongoError as e:
-            logger.error(f"Error running aggregation on {collection}: {str(e)}")
-            raise
-
-# Global database manager instance
-_db_manager = None
-
-async def initialize_db(uri: Optional[str] = None, db_name: Optional[str] = None) -> bool:
-    """Initialize database connection
-    
-    Args:
-        uri: MongoDB connection URI (default: None)
-        db_name: Database name (default: None)
-        
-    Returns:
-        bool: True if successful
-    """
-    global _db_manager
-    
-    # Get connection info from environment variables if not provided
-    uri = uri or os.environ.get("MONGODB_URI")
-    db_name = db_name or os.environ.get("MONGODB_DB")
-    
-    if not uri or not db_name:
-        logger.error("MongoDB connection info not set (MONGODB_URI, MONGODB_DB)")
-        return False
-    
-    # Create database manager
-    _db_manager = DatabaseManager(uri, db_name)
-    
-    # Connect to database
-    return await _db_manager.connect()
-
-async def get_db() -> DatabaseManager:
-    """Get database manager instance
-    
-    Returns:
-        DatabaseManager: Database manager
-    """
-    global _db_manager
-    
-    if not _db_manager:
-        # Initialize database connection
-        await initialize_db()
-        
-    return _db_manager
-
-async def close_db() -> None:
-    """Close database connection"""
-    global _db_manager
-    
-    if _db_manager:
-        await _db_manager.disconnect()
+        return self._db[name]

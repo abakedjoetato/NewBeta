@@ -62,3 +62,9 @@ flask
 flask-sqlalchemy
 gunicorn
 psycopg2-binary
+discord.py
+motor
+paramiko
+psutil
+pymongo
+python-dotenv
