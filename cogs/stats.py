@@ -591,9 +591,14 @@ class Stats(commands.Cog):
             favorite_victim = player_stats.get("favorite_victim")
             if favorite_victim:
                 prey_title = "🎯 Prey"
+                # Calculate KD against this specific player
+                prey_kills = favorite_victim.get('kill_count', 0)
+                prey_deaths = max(favorite_victim.get('death_count', 0), 1)  # Treat 0 as 1 for KDR calculation
+                prey_kd = round(prey_kills / prey_deaths, 2)
+                
                 matchups_embed.add_field(
                     name=prey_title,
-                    value=f"{favorite_victim['player_name']} ({favorite_victim['kill_count']} kills)",
+                    value=f"{favorite_victim['player_name']}\n{prey_kills} Kills  {prey_kd} KD",
                     inline=True
                 )
                 
@@ -604,9 +609,14 @@ class Stats(commands.Cog):
             nemesis = player_stats.get("nemesis")
             if nemesis:
                 nemesis_title = "☠️ Nemesis" 
+                # Calculate KD against this specific player
+                nemesis_deaths = nemesis.get('kill_count', 0)  # Their kills = player's deaths
+                nemesis_kills = nemesis.get('death_count', 0)  # Their deaths = player's kills
+                nemesis_kd = round(nemesis_kills / max(nemesis_deaths, 1), 2)
+                
                 matchups_embed.add_field(
                     name=nemesis_title,
-                    value=f"{nemesis['player_name']} ({nemesis['kill_count']} kills)",
+                    value=f"{nemesis['player_name']}\n{nemesis_deaths} Deaths  {nemesis_kd} KD",
                     inline=True
                 )
 

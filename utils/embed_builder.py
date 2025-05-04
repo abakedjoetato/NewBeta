@@ -74,7 +74,9 @@ class EmbedBuilder:
                           footer_text: Optional[str] = None,
                           footer_icon_url: Optional[str] = None,
                           timestamp: Optional[datetime] = None,
-                          url: Optional[str] = None) -> discord.Embed:
+                          url: Optional[str] = None,
+                          guild: Optional[discord.Guild] = None,
+                          bot: Optional[discord.Client] = None) -> discord.Embed:
         """Create a Discord embed with the given parameters
         
         Args:
@@ -135,6 +137,14 @@ class EmbedBuilder:
             
         # Set footer if provided
         if footer_text:
+            # If our footer contains "Powered By", let's use the bot's nickname if available
+            from utils.helpers import get_bot_name
+            
+            if footer_text and "Powered By" in footer_text and bot and guild:
+                # Replace the standard bot name with the nickname if available
+                bot_name = get_bot_name(bot, guild)
+                footer_text = footer_text.replace("Discord Bot", bot_name)
+            
             embed.set_footer(
                 text=footer_text,
                 icon_url=footer_icon_url
@@ -151,6 +161,8 @@ class EmbedBuilder:
                            title: Optional[str] = None, 
                            description: Optional[str] = None,
                            thumbnail: bool = False,
+                           guild: Optional[discord.Guild] = None,
+                           bot: Optional[discord.Client] = None,
                            **kwargs) -> discord.Embed:
         """Create a success-themed embed
         
@@ -158,6 +170,8 @@ class EmbedBuilder:
             title: Embed title (default: None)
             description: Embed description (default: None)
             thumbnail: Whether to show success icon as thumbnail (default: False)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             **kwargs: Additional arguments for create_embed
             
         Returns:
@@ -173,6 +187,13 @@ class EmbedBuilder:
         # Set default title if not provided
         if not title:
             title = "Success"
+        
+        # Add guild and bot to kwargs if not already present
+        if "guild" not in kwargs and guild is not None:
+            kwargs["guild"] = guild
+            
+        if "bot" not in kwargs and bot is not None:
+            kwargs["bot"] = bot
             
         return await cls.create_embed(
             title=title,
@@ -185,6 +206,8 @@ class EmbedBuilder:
                          title: Optional[str] = None, 
                          description: Optional[str] = None,
                          thumbnail: bool = False,
+                         guild: Optional[discord.Guild] = None,
+                         bot: Optional[discord.Client] = None,
                          **kwargs) -> discord.Embed:
         """Create an error-themed embed
         
@@ -192,6 +215,8 @@ class EmbedBuilder:
             title: Embed title (default: None)
             description: Embed description (default: None)
             thumbnail: Whether to show error icon as thumbnail (default: False)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             **kwargs: Additional arguments for create_embed
             
         Returns:
@@ -207,6 +232,13 @@ class EmbedBuilder:
         # Set default title if not provided
         if not title:
             title = "Error"
+        
+        # Add guild and bot to kwargs if not already present
+        if "guild" not in kwargs and guild is not None:
+            kwargs["guild"] = guild
+            
+        if "bot" not in kwargs and bot is not None:
+            kwargs["bot"] = bot
             
         return await cls.create_embed(
             title=title,
@@ -219,6 +251,8 @@ class EmbedBuilder:
                            title: Optional[str] = None, 
                            description: Optional[str] = None,
                            thumbnail: bool = False,
+                           guild: Optional[discord.Guild] = None,
+                           bot: Optional[discord.Client] = None,
                            **kwargs) -> discord.Embed:
         """Create a warning-themed embed
         
@@ -226,6 +260,8 @@ class EmbedBuilder:
             title: Embed title (default: None)
             description: Embed description (default: None)
             thumbnail: Whether to show warning icon as thumbnail (default: False)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             **kwargs: Additional arguments for create_embed
             
         Returns:
@@ -242,6 +278,13 @@ class EmbedBuilder:
         if not title:
             title = "Warning"
             
+        # Add guild and bot to kwargs if not already present
+        if "guild" not in kwargs and guild is not None:
+            kwargs["guild"] = guild
+            
+        if "bot" not in kwargs and bot is not None:
+            kwargs["bot"] = bot
+            
         return await cls.create_embed(
             title=title,
             description=description,
@@ -253,6 +296,8 @@ class EmbedBuilder:
                         title: Optional[str] = None, 
                         description: Optional[str] = None,
                         thumbnail: bool = False,
+                        guild: Optional[discord.Guild] = None,
+                        bot: Optional[discord.Client] = None,
                         **kwargs) -> discord.Embed:
         """Create an info-themed embed
         
@@ -260,6 +305,8 @@ class EmbedBuilder:
             title: Embed title (default: None)
             description: Embed description (default: None)
             thumbnail: Whether to show info icon as thumbnail (default: False)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             **kwargs: Additional arguments for create_embed
             
         Returns:
@@ -276,6 +323,13 @@ class EmbedBuilder:
         if not title:
             title = "Information"
             
+        # Add guild and bot to kwargs if not already present
+        if "guild" not in kwargs and guild is not None:
+            kwargs["guild"] = guild
+            
+        if "bot" not in kwargs and bot is not None:
+            kwargs["bot"] = bot
+            
         return await cls.create_embed(
             title=title,
             description=description,
@@ -287,7 +341,9 @@ class EmbedBuilder:
                                 player_name: str, 
                                 stats: Dict[str, Any], 
                                 avatar_url: Optional[str] = None,
-                                faction_color: Optional[int] = None) -> discord.Embed:
+                                faction_color: Optional[int] = None,
+                                guild: Optional[discord.Guild] = None,
+                                bot: Optional[discord.Client] = None) -> discord.Embed:
         """Create a player statistics embed
         
         Args:
@@ -295,6 +351,8 @@ class EmbedBuilder:
             stats: Player statistics dictionary
             avatar_url: Player avatar URL (default: None)
             faction_color: Faction color (default: None)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             
         Returns:
             discord.Embed: Player statistics embed
@@ -326,7 +384,9 @@ class EmbedBuilder:
             fields=fields,
             thumbnail_url=avatar_url or cls.ICONS["stats"],
             footer_text="Last updated",
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            guild=guild,
+            bot=bot
         )
     
     @classmethod
@@ -334,7 +394,9 @@ class EmbedBuilder:
                                 faction_name: str, 
                                 stats: Dict[str, Any], 
                                 faction_icon: Optional[str] = None,
-                                faction_color: Optional[int] = None) -> discord.Embed:
+                                faction_color: Optional[int] = None,
+                                guild: Optional[discord.Guild] = None,
+                                bot: Optional[discord.Client] = None) -> discord.Embed:
         """Create a faction statistics embed
         
         Args:
@@ -342,6 +404,8 @@ class EmbedBuilder:
             stats: Faction statistics dictionary
             faction_icon: Faction icon URL (default: None)
             faction_color: Faction color (default: None)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             
         Returns:
             discord.Embed: Faction statistics embed
@@ -388,7 +452,9 @@ class EmbedBuilder:
             fields=fields,
             thumbnail_url=icon,
             footer_text="Last updated",
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            guild=guild,
+            bot=bot
         )
     
     @classmethod
@@ -396,7 +462,9 @@ class EmbedBuilder:
                               title: str, 
                               leaderboard: List[Dict[str, Any]],
                               color: Optional[int] = None,
-                              icon: Optional[str] = None) -> discord.Embed:
+                              icon: Optional[str] = None,
+                              guild: Optional[discord.Guild] = None,
+                              bot: Optional[discord.Client] = None) -> discord.Embed:
         """Create a leaderboard embed
         
         Args:
@@ -404,6 +472,8 @@ class EmbedBuilder:
             leaderboard: List of player/faction dictionaries with name, value, and rank
             color: Embed color (default: None)
             icon: Icon URL (default: None)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             
         Returns:
             discord.Embed: Leaderboard embed
@@ -438,15 +508,67 @@ class EmbedBuilder:
             color=color,
             thumbnail_url=icon,
             footer_text="Last updated",
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            guild=guild,
+            bot=bot
         )
     
+    @classmethod
+    async def create_base_embed(cls, 
+                              title: str,
+                              description: str,
+                              color: Optional[int] = None,
+                              guild: Optional[discord.Guild] = None,
+                              bot: Optional[discord.Client] = None,
+                              **kwargs) -> discord.Embed:
+        """Create a base embed with standard formatting
+        
+        Args:
+            title: Embed title
+            description: Embed description
+            color: Embed color (default: None)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
+            **kwargs: Additional arguments for create_embed
+            
+        Returns:
+            discord.Embed: Base embed
+        """
+        # Set default color if not provided
+        color = color or cls.COLORS["primary"]
+        
+        # Set timestamp to now if not provided
+        if "timestamp" not in kwargs:
+            kwargs["timestamp"] = datetime.utcnow()
+            
+        # Set default footer if not provided
+        if "footer_text" not in kwargs:
+            # Get bot name to use in footer
+            from utils.helpers import get_bot_name
+            bot_name = "Tower of Temptation"
+            if bot and guild:
+                bot_name = get_bot_name(bot, guild)
+            
+            kwargs["footer_text"] = f"Powered By {bot_name}"
+        
+        # Create embed
+        return await cls.create_embed(
+            title=title,
+            description=description,
+            color=color,
+            guild=guild,
+            bot=bot,
+            **kwargs
+        )
+        
     @classmethod
     async def help_embed(cls, 
                         title: str, 
                         description: str,
                         commands: List[Dict[str, str]],
-                        footer_text: Optional[str] = None) -> discord.Embed:
+                        footer_text: Optional[str] = None,
+                        guild: Optional[discord.Guild] = None,
+                        bot: Optional[discord.Client] = None) -> discord.Embed:
         """Create a help embed
         
         Args:
@@ -454,6 +576,8 @@ class EmbedBuilder:
             description: Help description
             commands: List of command dictionaries with name and description
             footer_text: Footer text (default: None)
+            guild: The Discord guild for customization (default: None)
+            bot: The Discord bot instance for customization (default: None)
             
         Returns:
             discord.Embed: Help embed
@@ -468,6 +592,12 @@ class EmbedBuilder:
                 "inline": False
             })
         
+        # If no custom footer text is provided, use a default with bot name
+        if not footer_text and bot and guild:
+            from utils.helpers import get_bot_name
+            bot_name = get_bot_name(bot, guild)
+            footer_text = f"Use /{bot_name} help <command> for more details"
+        
         # Create embed
         return await cls.create_embed(
             title=title,
@@ -476,5 +606,7 @@ class EmbedBuilder:
             fields=fields,
             thumbnail_url=cls.ICONS["info"],
             footer_text=footer_text,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.utcnow(),
+            guild=guild,
+            bot=bot
         )

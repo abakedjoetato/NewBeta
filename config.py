@@ -81,12 +81,12 @@ PREMIUM_TIERS = {
     },
     2: {  # Standard premium
         "max_servers": 5,
-        "features": ["killfeed", "events", "connections", "stats", "economy", "gambling"],
+        "features": ["killfeed", "events", "connections", "stats", "economy", "gambling", "bounty"],
         "server_slots": 5,
     },
     3: {  # Advanced premium
         "max_servers": 10,
-        "features": ["killfeed", "events", "connections", "stats", "custom_embeds", "economy", "gambling"],
+        "features": ["killfeed", "events", "connections", "stats", "custom_embeds", "economy", "gambling", "bounty"],
         "server_slots": 10,
     }
 }

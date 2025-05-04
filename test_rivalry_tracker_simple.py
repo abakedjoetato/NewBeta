@@ -41,10 +41,17 @@ async def update_player_rivalries(players):
         for victim_id, data in victims.items():
             count = data.get("count", 0)
             if count > prey_count and count >= 3:  # Minimum 3 kills to be considered prey
+                # Get death count from this player (for KD calculation)
+                death_count = 0
+                if killers := player.get("killers"):
+                    if victim_data := killers.get(victim_id):
+                        death_count = victim_data.get("count", 0)
+                        
                 prey = {
                     "player_id": victim_id,
                     "player_name": data.get("name", "Unknown"),
-                    "kill_count": count
+                    "kill_count": count,
+                    "death_count": death_count
                 }
                 prey_count = count
         
@@ -61,10 +68,17 @@ async def update_player_rivalries(players):
         for killer_id, data in killers.items():
             count = data.get("count", 0)
             if count > nemesis_count and count >= 3:  # Minimum 3 kills to be considered nemesis
+                # Get kill count against this player (for KD calculation)
+                kill_count = 0
+                if victims := player.get("victims"):
+                    if killer_data := victims.get(killer_id):
+                        kill_count = killer_data.get("count", 0)
+                
                 nemesis = {
                     "player_id": killer_id,
                     "player_name": data.get("name", "Unknown"),
-                    "kill_count": count
+                    "kill_count": count,
+                    "death_count": kill_count
                 }
                 nemesis_count = count
         
@@ -141,12 +155,18 @@ async def main():
                 last_updated = rivalries.get("last_updated")
                 
                 if prey:
-                    logger.info(f"Prey: {prey.get('player_name')} ({prey.get('kill_count')} kills)")
+                    prey_kills = prey.get('kill_count', 0)
+                    prey_deaths = max(prey.get('death_count', 0), 1)  # Treat 0 as 1 for KDR calculation
+                    prey_kd = round(prey_kills / prey_deaths, 2)
+                    logger.info(f"Prey: {prey.get('player_name')}  {prey_kills} Kills  {prey_kd} KD")
                 else:
                     logger.info("No prey found")
                     
                 if nemesis:
-                    logger.info(f"Nemesis: {nemesis.get('player_name')} ({nemesis.get('kill_count')} kills)")
+                    nemesis_deaths = nemesis.get('kill_count', 0)  # Their kills = player's deaths
+                    nemesis_kills = nemesis.get('death_count', 0)  # Their deaths = player's kills
+                    nemesis_kd = round(nemesis_kills / max(nemesis_deaths, 1), 2)
+                    logger.info(f"Nemesis: {nemesis.get('player_name')}  {nemesis_deaths} Deaths  {nemesis_kd} KD")
                 else:
                     logger.info("No nemesis found")
                     

@@ -64,10 +64,17 @@ class RivalryTracker:
                 for victim_id, data in victims.items():
                     count = data.get("count", 0)
                     if count > prey_count and count >= 3:  # Minimum 3 kills to be considered prey
+                        # Get death count from this player (for KD calculation)
+                        death_count = 0
+                        if killers := player.get("killers"):
+                            if victim_data := killers.get(victim_id):
+                                death_count = victim_data.get("count", 0)
+                                
                         prey = {
                             "player_id": victim_id,
                             "player_name": data.get("name", "Unknown"),
-                            "kill_count": count
+                            "kill_count": count,
+                            "death_count": death_count
                         }
                         prey_count = count
                 
@@ -84,10 +91,17 @@ class RivalryTracker:
                 for killer_id, data in killers.items():
                     count = data.get("count", 0)
                     if count > nemesis_count and count >= 3:  # Minimum 3 kills to be considered nemesis
+                        # Get kill count against this player (for KD calculation)
+                        kill_count = 0
+                        if victims := player.get("victims"):
+                            if killer_data := victims.get(killer_id):
+                                kill_count = killer_data.get("count", 0)
+                                
                         nemesis = {
                             "player_id": killer_id,
                             "player_name": data.get("name", "Unknown"),
-                            "kill_count": count
+                            "kill_count": count,
+                            "death_count": kill_count
                         }
                         nemesis_count = count
                 

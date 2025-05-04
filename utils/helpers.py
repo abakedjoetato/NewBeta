@@ -6,6 +6,7 @@ This module provides:
 2. Discord-specific utilities
 3. Text formatting helpers
 4. Common conversion functions
+5. Bot naming and reference helpers
 """
 import re
 import logging
@@ -193,6 +194,26 @@ async def check_admin_permissions(ctx: commands.Context) -> bool:
         return True
         
     return False
+
+def get_bot_name(bot: commands.Bot, guild: Optional[discord.Guild] = None) -> str:
+    """Get the bot's name or nickname in a guild
+    
+    Args:
+        bot: The bot instance
+        guild: The guild to check nickname in (optional)
+        
+    Returns:
+        str: The bot's nickname in the guild, or its username if no nickname or no guild
+    """
+    # First check if we have a guild and if the bot has a nickname in it
+    if guild is not None:
+        # Try to get the bot's member object in the guild
+        bot_member = guild.get_member(bot.user.id)
+        if bot_member and bot_member.nick:
+            return bot_member.nick
+    
+    # Default to the bot's username
+    return bot.user.name
 
 def sanitize_string(text: str) -> str:
     """Sanitize string for database storage
