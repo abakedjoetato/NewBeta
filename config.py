@@ -37,6 +37,8 @@ COLLECTIONS = {
     "connections": "connections",
     "economy": "economy",
     "transactions": "transactions",
+    "bounties": "bounties",
+    "player_links": "player_links",
 }
 
 # SFTP connection settings

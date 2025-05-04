@@ -22,8 +22,8 @@ from models.server_config import ServerConfig
 
 logger = logging.getLogger(__name__)
 
-def format_time_ago(timestamp_str: Optional[str]) -> str:
-    """Format a timestamp as a human-readable time ago string
+def format_time_ago_str(timestamp_str: Optional[str]) -> str:
+    """Format a timestamp string as a human-readable time ago string
     
     Args:
         timestamp_str: ISO format timestamp string
@@ -38,27 +38,11 @@ def format_time_ago(timestamp_str: Optional[str]) -> str:
         # Parse the ISO timestamp
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         
-        # Calculate the time difference
-        now = datetime.utcnow()
-        delta = now - dt
+        # Use the datetime version of the function
+        return format_time_ago(dt)
         
-        # Format based on the time difference
-        seconds = delta.total_seconds()
-        
-        if seconds < 60:
-            return "just now"
-        elif seconds < 3600:
-            minutes = int(seconds // 60)
-            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-        elif seconds < 86400:
-            hours = int(seconds // 3600)
-            return f"{hours} hour{'s' if hours != 1 else ''} ago"
-        elif seconds < 2592000:  # 30 days
-            days = int(seconds // 86400)
-            return f"{days} day{'s' if days != 1 else ''} ago"
-        else:
-            # For older timestamps, return the date
-            return dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return "unknown"
 
 def generate_random_code(length: int = 6) -> str:
     """Generate random verification code

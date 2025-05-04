@@ -145,7 +145,8 @@ async def load_extensions(bot):
         # New feature cogs
         "cogs.factions",     # Faction system
         "cogs.rivalries",    # Rivalry tracking
-        "cogs.player_links"  # Player linking to Discord users
+        "cogs.player_links", # Player linking to Discord users
+        "cogs.bounties"      # Bounty system for player targets
     ]
     
     for extension in extensions:
