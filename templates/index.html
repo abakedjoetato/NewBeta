@@ -1,0 +1,160 @@
+{% extends 'base.html' %}
+
+{% block title %}Tower of Temptation PvP Statistics Bot{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero-section {
+        background-color: #7289DA;
+        color: white;
+        padding: 60px 0;
+        margin-bottom: 40px;
+    }
+    .feature-icon {
+        font-size: 2rem;
+        color: #7289DA;
+        margin-bottom: 15px;
+    }
+    .card {
+        transition: transform 0.3s ease;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hero-section">
+    <div class="container text-center">
+        <h1>Tower of Temptation PvP Statistics Bot</h1>
+        <p class="lead">Track PvP statistics, manage factions, and more for your Tower of Temptation server</p>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=0&scope=bot%20applications.commands" class="btn btn-light btn-lg">
+            <i data-feather="plus-circle" class="me-1"></i> Add to Discord
+        </a>
+    </div>
+</div>
+
+<section id="features" class="py-5">
+    <div class="container">
+        <h2 class="text-center mb-5">Core Features</h2>
+        <div class="row">
+            <div class="col-md-4 text-center mb-4">
+                <div class="feature-icon">
+                    <i data-feather="bar-chart-2"></i>
+                </div>
+                <h3>PvP Statistics</h3>
+                <p>Track kills, deaths, K/D ratio, and more for all players on your server.</p>
+            </div>
+            <div class="col-md-4 text-center mb-4">
+                <div class="feature-icon">
+                    <i data-feather="award"></i>
+                </div>
+                <h3>Leaderboards</h3>
+                <p>View competitive leaderboards for kills, deaths, K/D ratio, and activity.</p>
+            </div>
+            <div class="col-md-4 text-center mb-4">
+                <div class="feature-icon">
+                    <i data-feather="bell"></i>
+                </div>
+                <h3>Event Tracking</h3>
+                <p>Get notifications for important in-game events and milestones.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section id="new-features" class="py-5 bg-light">
+    <div class="container">
+        <h2 class="text-center mb-5">New Features</h2>
+        <div class="row">
+            <div class="col-md-4 mb-4">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h3 class="card-title h5">Factions</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>Create and manage player factions with custom colors and descriptions.</p>
+                        <ul>
+                            <li>Faction-based leaderboards</li>
+                            <li>Faction statistics tracking</li>
+                            <li>Manage faction membership</li>
+                            <li>Faction vs faction activity metrics</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h3 class="card-title h5">Rivalries</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>Track ongoing feuds between players with detailed statistics.</p>
+                        <ul>
+                            <li>Declare player rivalries</li>
+                            <li>Track kill/death statistics between rivals</li>
+                            <li>View top and closest rivalries</li>
+                            <li>Get rivalry notifications</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h3 class="card-title h5">Bounty System</h3>
+                    </div>
+                    <div class="card-body">
+                        <p>Place bounties on players with custom rewards and conditions.</p>
+                        <ul>
+                            <li>Place bounties on players</li>
+                            <li>Claim rewards for eliminating targets</li>
+                            <li>Automatic bounties for killstreaks</li>
+                            <li>Time-limited bounty durations</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section id="how-it-works" class="py-5">
+    <div class="container">
+        <h2 class="text-center mb-5">How It Works</h2>
+        <div class="row align-items-center">
+            <div class="col-md-6">
+                <img src="{{ url_for('static', filename='images/bot-diagram.svg') }}" alt="How the bot works" class="img-fluid mb-4 mb-md-0">
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h3 class="h5">Automatic Data Collection</h3>
+                        <p>The bot connects to your game server via SFTP and retrieves CSV death log files at regular intervals.</p>
+                        
+                        <h3 class="h5 mt-4">Intelligent Parsing</h3>
+                        <p>Advanced parsing algorithms extract detailed information about kills, weapons used, distances, and more.</p>
+                        
+                        <h3 class="h5 mt-4">Real-time Updates</h3>
+                        <p>Statistics are updated in real-time as new data becomes available, ensuring your leaderboards and player stats are always current.</p>
+                        
+                        <h3 class="h5 mt-4">Seamless Discord Integration</h3>
+                        <p>All data is accessible through intuitive Discord slash commands, with rich embeds and interactive elements.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section id="cta" class="py-5 bg-primary text-white text-center">
+    <div class="container">
+        <h2 class="mb-4">Ready to enhance your Tower of Temptation server?</h2>
+        <p class="lead mb-4">Add the bot today and start tracking your PvP statistics!</p>
+        <a href="https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=0&scope=bot%20applications.commands" class="btn btn-light btn-lg">
+            <i data-feather="plus-circle" class="me-1"></i> Add to Discord
+        </a>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,408 @@
+{% extends 'base.html' %}
+
+{% block title %}Documentation - Tower of Temptation PvP Statistics Bot{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-3">
+        <div class="card mb-4 sticky-top" style="top: 20px; z-index: 1;">
+            <div class="card-header bg-dark text-white">
+                <h5 class="card-title mb-0">Contents</h5>
+            </div>
+            <div class="card-body">
+                <nav id="navbar-docs" class="nav flex-column">
+                    <a class="nav-link" href="#getting-started">Getting Started</a>
+                    <a class="nav-link" href="#commands">Commands</a>
+                    <nav class="nav flex-column ms-3">
+                        <a class="nav-link" href="#stats-commands">Statistics Commands</a>
+                        <a class="nav-link" href="#faction-commands">Faction Commands</a>
+                        <a class="nav-link" href="#bounty-commands">Bounty System</a>
+                        <a class="nav-link" href="#rivalry-commands">Rivalry Tracking</a>
+                        <a class="nav-link" href="#admin-commands">Admin Commands</a>
+                    </nav>
+                    <a class="nav-link" href="#features">Features</a>
+                    <a class="nav-link" href="#faq">FAQ</a>
+                </nav>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-9">
+        <h1 class="mb-4">Bot Documentation</h1>
+        
+        <section id="getting-started" class="mb-5">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h2 class="card-title h5 mb-0">Getting Started</h2>
+                </div>
+                <div class="card-body">
+                    <p>The Tower of Temptation PvP Statistics Bot tracks player versus player statistics from game servers. It connects to game servers, retrieves and parses CSV files containing death logs, and provides various statistics, leaderboards, and event tracking features.</p>
+                    
+                    <h3 class="h5 mt-4">Inviting the Bot</h3>
+                    <p>To add the bot to your Discord server, click the button below:</p>
+                    <a href="https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=0&scope=bot%20applications.commands" class="btn btn-primary" target="_blank">
+                        <i data-feather="plus-circle" class="me-1"></i> Add to Discord
+                    </a>
+                    
+                    <h3 class="h5 mt-4">Initial Setup</h3>
+                    <p>After adding the bot to your server, follow these steps:</p>
+                    <ol>
+                        <li>Use <code>/server add</code> to register your game server</li>
+                        <li>Configure SFTP access for log file retrieval</li>
+                        <li>Set up factions using <code>/faction create</code> (optional)</li>
+                        <li>Configure automatic updates with <code>/config update_interval</code></li>
+                    </ol>
+                </div>
+            </div>
+        </section>
+        
+        <section id="commands" class="mb-5">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h2 class="card-title h5 mb-0">Commands</h2>
+                </div>
+                <div class="card-body">
+                    <p>The bot uses Discord's slash commands. Here's a comprehensive list of available commands.</p>
+                    
+                    <h3 id="stats-commands" class="h5 mt-4">Statistics Commands</h3>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Description</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>/stats player</code></td>
+                                    <td>View statistics for a specific player</td>
+                                    <td><code>/stats player [player_name]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/stats leaderboard</code></td>
+                                    <td>View server leaderboard</td>
+                                    <td><code>/stats leaderboard [category] [timeframe]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/stats weapon</code></td>
+                                    <td>View weapon usage statistics</td>
+                                    <td><code>/stats weapon [weapon_name]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/stats server</code></td>
+                                    <td>View overall server statistics</td>
+                                    <td><code>/stats server</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 id="faction-commands" class="h5 mt-4">Faction Commands</h3>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Description</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>/faction create</code></td>
+                                    <td>Create a new faction</td>
+                                    <td><code>/faction create [name] [identifier] [color]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/faction stats</code></td>
+                                    <td>View statistics for a faction</td>
+                                    <td><code>/faction stats [faction_name]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/faction members</code></td>
+                                    <td>List members of a faction</td>
+                                    <td><code>/faction members [faction_name]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/faction leaderboard</code></td>
+                                    <td>View factions leaderboard</td>
+                                    <td><code>/faction leaderboard [category]</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 id="bounty-commands" class="h5 mt-4">Bounty System</h3>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Description</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>/bounty place</code></td>
+                                    <td>Place a bounty on a player</td>
+                                    <td><code>/bounty place [player_name] [reward] [reason]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/bounty active</code></td>
+                                    <td>List active bounties</td>
+                                    <td><code>/bounty active</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/bounty info</code></td>
+                                    <td>View details about a specific bounty</td>
+                                    <td><code>/bounty info [bounty_id]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/bounty my</code></td>
+                                    <td>View bounties you've placed or claimed</td>
+                                    <td><code>/bounty my [placed|claimed]</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 id="rivalry-commands" class="h5 mt-4">Rivalry Tracking</h3>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Description</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>/rivalry check</code></td>
+                                    <td>Check rivalry between two players</td>
+                                    <td><code>/rivalry check [player1] [player2]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/rivalry top</code></td>
+                                    <td>View top rivalries on the server</td>
+                                    <td><code>/rivalry top</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/rivalry my</code></td>
+                                    <td>View your rivalries</td>
+                                    <td><code>/rivalry my</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h3 id="admin-commands" class="h5 mt-4">Admin Commands</h3>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Description</th>
+                                    <th>Usage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>/server add</code></td>
+                                    <td>Add a new game server</td>
+                                    <td><code>/server add [name] [sftp_details]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/server list</code></td>
+                                    <td>List configured servers</td>
+                                    <td><code>/server list</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/config update_interval</code></td>
+                                    <td>Set how often logs are processed</td>
+                                    <td><code>/config update_interval [minutes]</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>/config channels</code></td>
+                                    <td>Configure notification channels</td>
+                                    <td><code>/config channels [channel_type] [channel]</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="features" class="mb-5">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h2 class="card-title h5 mb-0">Features</h2>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h3 class="h5 card-title">PvP Statistics Tracking</h3>
+                                    <p class="card-text">Comprehensive tracking of kills, deaths, weapons used, and more.</p>
+                                    <ul>
+                                        <li>Kills and deaths tracking</li>
+                                        <li>K/D ratio calculation</li>
+                                        <li>Weapon usage statistics</li>
+                                        <li>Distance and time-of-day analytics</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h3 class="h5 card-title">Leaderboards</h3>
+                                    <p class="card-text">Competitive leaderboards for various statistics.</p>
+                                    <ul>
+                                        <li>Most kills</li>
+                                        <li>Highest K/D ratio</li>
+                                        <li>Most improved players</li>
+                                        <li>Weapon specialists</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h3 class="h5 card-title">Faction System</h3>
+                                    <p class="card-text">Create and manage player factions with custom themes.</p>
+                                    <ul>
+                                        <li>Faction vs faction statistics</li>
+                                        <li>Custom faction colors and icons</li>
+                                        <li>Faction territory control tracking</li>
+                                        <li>Faction leaderboards</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h3 class="h5 card-title">Bounty System</h3>
+                                    <p class="card-text">Place and claim bounties on players.</p>
+                                    <ul>
+                                        <li>Custom bounty rewards</li>
+                                        <li>Time-limited bounties</li>
+                                        <li>Automatic bounty generation</li>
+                                        <li>Bounty notifications</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="faq" class="mb-5">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h2 class="card-title h5 mb-0">Frequently Asked Questions</h2>
+                </div>
+                <div class="card-body">
+                    <div class="accordion" id="faqAccordion">
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="faq1">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapse1" aria-expanded="false" aria-controls="faqCollapse1">
+                                    How does the bot get game data?
+                                </button>
+                            </h2>
+                            <div id="faqCollapse1" class="accordion-collapse collapse" aria-labelledby="faq1" data-bs-parent="#faqAccordion">
+                                <div class="accordion-body">
+                                    <p>The bot connects to your game server via SFTP and retrieves death log CSV files. It then parses these files to extract kill/death information and other statistics.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="faq2">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapse2" aria-expanded="false" aria-controls="faqCollapse2">
+                                    How do I link my game account to Discord?
+                                </button>
+                            </h2>
+                            <div id="faqCollapse2" class="accordion-collapse collapse" aria-labelledby="faq2" data-bs-parent="#faqAccordion">
+                                <div class="accordion-body">
+                                    <p>Use the <code>/link</code> command to initiate the linking process. The bot will provide instructions for verifying your game account, which usually involves killing a specific player or performing a specific action in-game.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="faq3">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapse3" aria-expanded="false" aria-controls="faqCollapse3">
+                                    How does the bounty system work?
+                                </button>
+                            </h2>
+                            <div id="faqCollapse3" class="accordion-collapse collapse" aria-labelledby="faq3" data-bs-parent="#faqAccordion">
+                                <div class="accordion-body">
+                                    <p>Players can place bounties on other players using the <code>/bounty place</code> command. Bounties have a reward amount and expire after 1 hour if not claimed. When a player kills the bounty target, they automatically claim the bounty and receive the reward.</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="faq4">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faqCollapse4" aria-expanded="false" aria-controls="faqCollapse4">
+                                    What permissions does the bot need?
+                                </button>
+                            </h2>
+                            <div id="faqCollapse4" class="accordion-collapse collapse" aria-labelledby="faq4" data-bs-parent="#faqAccordion">
+                                <div class="accordion-body">
+                                    <p>The bot requires permissions to read and send messages, embed links, attach files, and use slash commands. For proper functionality, it's recommended to give the bot the following permissions:</p>
+                                    <ul>
+                                        <li>Read Messages/View Channels</li>
+                                        <li>Send Messages</li>
+                                        <li>Embed Links</li>
+                                        <li>Attach Files</li>
+                                        <li>Use External Emojis</li>
+                                        <li>Add Reactions</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Smooth scrolling for documentation links
+        document.querySelectorAll('#navbar-docs a').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href');
+                const targetElement = document.querySelector(targetId);
+                window.scrollTo({
+                    top: targetElement.offsetTop - 20,
+                    behavior: 'smooth'
+                });
+            });
+        });
+        
+        // Activate scrollspy for navigation
+        const scrollSpy = new bootstrap.ScrollSpy(document.body, {
+            target: '#navbar-docs',
+            offset: 100
+        });
+    });
+</script>
+{% endblock %}
