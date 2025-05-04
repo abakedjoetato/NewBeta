@@ -1,295 +1,221 @@
 """
-Bot initialization and configuration
+Tower of Temptation PvP Statistics Discord Bot
+
+This is the main entry point for the Discord bot. It handles:
+1. Loading environment variables
+2. Setting up Discord client
+3. Connecting to MongoDB
+4. Loading cogs (command modules)
+5. Starting the bot
 """
 import os
+import sys
+import asyncio
 import logging
+import traceback
+from datetime import datetime
+
 import discord
 from discord.ext import commands
-import asyncio
 
-from config import COMMAND_PREFIX, INTENTS, ACTIVITY
-from utils.db import initialize_db
+from utils.env_config import validate_environment, configure_logging
+from utils.db import initialize_db, close_db_connection
 
+# Set up logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
-async def initialize_bot(force_sync=False):
-    """Initialize and configure the Discord bot instance
-    
-    Args:
-        force_sync: Force a full sync of commands globally
-    """
-    
-    # Set up intents
-    intents = discord.Intents.default()
-    for intent_name in INTENTS:
-        if hasattr(intents, intent_name):
-            setattr(intents, intent_name, True)
+# Check that we have our required environment variables
+if not validate_environment():
+    logger.critical("Missing critical environment variables. Bot cannot start.")
+    sys.exit(1)
 
-    # Create bot instance
-    bot = commands.Bot(
-        command_prefix=commands.when_mentioned_or(COMMAND_PREFIX),
-        intents=intents,
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name=ACTIVITY
-        ),
-        help_command=None,
-        application_id=os.getenv("BOT_APPLICATION_ID")  # Add application ID for slash commands
+# Get environment settings
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
+BOT_APPLICATION_ID = os.environ.get('BOT_APPLICATION_ID')
+COMMAND_PREFIX = os.environ.get('COMMAND_PREFIX', '!')
+HOME_GUILD_ID = os.environ.get('HOME_GUILD_ID')
+DEBUG_MODE = os.environ.get('DEBUG', 'false').lower() in ('true', '1', 'yes', 'y')
+
+# Set up intents (what events the bot will receive)
+intents = discord.Intents.default()
+intents.guilds = True           # For server join/leave events
+intents.guild_messages = True   # For message commands
+intents.message_content = True  # For reading message content
+intents.members = True          # For member info and nickname functions
+
+# Initialize the bot with command prefix and intents
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, application_id=BOT_APPLICATION_ID)
+
+# Track bot startup time
+start_time = datetime.utcnow()
+
+@bot.event
+async def on_ready():
+    """Called when the bot is ready and connected to Discord."""
+    logger.info(f"Bot connected to Discord as {bot.user} (ID: {bot.user.id})")
+    logger.info(f"Bot is in {len(bot.guilds)} guilds")
+    
+    # Log some guild details in debug mode
+    if DEBUG_MODE:
+        for guild in bot.guilds:
+            logger.debug(f"  - {guild.name} (ID: {guild.id})")
+    
+    # Set bot status
+    activity = discord.Activity(
+        type=discord.ActivityType.watching,
+        name="PvP battles | !help"
     )
+    await bot.change_presence(activity=activity)
     
-    # Store the force_sync flag for later use
-    bot.force_sync = force_sync
-
-    # Initialize database connection
-    db = await initialize_db()
-    bot.db = db
-
-    # Store important bot variables
-    bot.home_guild_id = 0
-    if os.getenv("HOME_GUILD_ID"):
-        try:
-            bot.home_guild_id = int(os.getenv("HOME_GUILD_ID"))
-        except (ValueError, TypeError):
-            logger.warning("Invalid HOME_GUILD_ID environment variable")
-    
-    # Owner ID is hardcoded for security
-    bot.owner_id = 462961235382763520  # Your Discord User ID
-    
-    # Initialize connections and task trackers
-    bot.sftp_connections = {}
-    bot.background_tasks = {}
-    bot.server_monitors = {}
-    
-    # Add base event handlers
-    @bot.event
-    async def on_ready():
-        """Called when the bot is ready"""
-        guilds = len(bot.guilds)
-        logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
-        logger.info(f"Connected to {guilds} guilds")
+    # Update status
+    try:
+        home_guild = bot.get_guild(int(HOME_GUILD_ID)) if HOME_GUILD_ID else None
+        status_channel = next((channel for channel in home_guild.text_channels if 'status' in channel.name), None) if home_guild else None
         
-        # Load extension cogs
-        await load_extensions(bot)
-        
-        # Start background tasks for all registered servers
-        await setup_background_tasks(bot)
-        
-        # Sync commands with Discord
-        logger.info("Syncing slash commands with Discord...")
-        try:
-            # If force_sync is True, sync globally with guild=None
-            if getattr(bot, 'force_sync', False):
-                logger.info("Performing a global force sync of commands...")
-                commands = await bot.tree.sync(guild=None)
-                logger.info(f"Slash commands force synced globally! Synced {len(commands)} commands.")
-            else:
-                # Normal sync otherwise
-                commands = await bot.tree.sync()
-                logger.info(f"Slash commands synced successfully! Synced {len(commands)} commands.")
-        except Exception as e:
-            logger.error(f"Error syncing commands: {e}", exc_info=True)
+        if status_channel:
+            uptime = (datetime.utcnow() - start_time).total_seconds()
+            await status_channel.send(f"Bot is online! Startup took {uptime:.2f} seconds.")
+    except Exception as e:
+        logger.error(f"Failed to send startup message: {e}")
+    
+    logger.info("Bot is ready for commands!")
 
-    @bot.event
-    async def on_guild_join(guild):
-        """Called when the bot joins a new guild"""
-        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
-        # Create guild document in database
-        guild_data = {
-            "guild_id": guild.id,
-            "name": guild.name,
-            "premium_tier": 0,
-            "joined_at": discord.utils.utcnow().isoformat(),
-            "servers": []
-        }
-        await bot.db.guilds.update_one(
-            {"guild_id": guild.id}, 
-            {"$setOnInsert": guild_data}, 
-            upsert=True
+@bot.event
+async def on_guild_join(guild):
+    """Called when the bot joins a new guild."""
+    logger.info(f"Bot has been added to new guild: {guild.name} (ID: {guild.id})")
+    
+    # Try to find a general or bot channel to send welcome message
+    welcome_channel = None
+    for channel in guild.text_channels:
+        if channel.permissions_for(guild.me).send_messages:
+            if 'general' in channel.name.lower() or 'bot' in channel.name.lower():
+                welcome_channel = channel
+                break
+    
+    if not welcome_channel:
+        # If no preferred channel found, use the first one we can send to
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                welcome_channel = channel
+                break
+    
+    if welcome_channel:
+        await welcome_channel.send(
+            "👋 Thanks for adding Tower of Temptation PvP Statistics Bot!\n\n"
+            "Type `/` to see available commands or use `/help` for more information.\n\n"
+            "To get started, server admins can use `/server setup` to configure game server connections."
         )
 
-    @bot.event
-    async def on_command_error(ctx, error):
-        """Global error handler for commands"""
-        if isinstance(error, commands.CommandNotFound):
-            return
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"Missing required argument: {error.param.name}")
-        elif isinstance(error, commands.BadArgument):
-            await ctx.send(f"Bad argument: {error}")
-        elif isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use this command.")
-        elif isinstance(error, commands.BotMissingPermissions):
-            perms = ", ".join(error.missing_permissions)
-            await ctx.send(f"I need the following permissions to run this command: {perms}")
-        elif isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(
-                f"This command is on cooldown. Try again in {error.retry_after:.2f} seconds."
-            )
-        else:
-            logger.error(f"Command error: {error}", exc_info=True)
-            await ctx.send(f"An error occurred: {error}")
-
-    return bot
-
-async def load_extensions(bot):
-    """Load all extension cogs"""
-    extensions = [
-        "cogs.admin",
-        "cogs.killfeed",
-        "cogs.stats",
-        "cogs.events",
-        "cogs.setup",
-        "cogs.premium",
-        "cogs.economy",
-        "cogs.help",  # New help cog for comprehensive command documentation
-        # New feature cogs
-        "cogs.factions",     # Faction system
-        "cogs.rivalries",    # Rivalry tracking
-        "cogs.player_links", # Player linking to Discord users
-        "cogs.bounties"      # Bounty system for player targets
-    ]
-    
-    for extension in extensions:
-        try:
-            await bot.load_extension(extension)
-            logger.info(f"Loaded extension: {extension}")
-        except Exception as e:
-            logger.error(f"Failed to load extension {extension}: {e}", exc_info=True)
-
-async def pay_interest_task(bot):
-    """Background task to pay interest to all players weekly"""
-    try:
-        # Wait until the bot is ready
-        await bot.wait_until_ready()
-        
-        # Import the economy model
-        from models.economy import Economy
-        from models.guild import Guild
-        
-        logger.info("Started weekly interest payment task")
-        
-        while not bot.is_closed():
-            # Wait for 1 week (in seconds)
-            # For testing, you can reduce this to a smaller value
-            await asyncio.sleep(7 * 24 * 60 * 60)  # 7 days
-            
-            # Get all guilds with registered servers
-            cursor = bot.db.guilds.find({"servers": {"$exists": True, "$ne": []}})
-            
-            async for guild_doc in cursor:
-                guild_id = guild_doc["guild_id"]
-                guild = Guild(bot.db, guild_doc)
-                
-                # Only process guilds with premium tier 2+
-                if guild.premium_tier < 2:
-                    continue
-                
-                interest_rate = 0.01  # 1% interest
-                
-                # Process each server in the guild
-                for server in guild_doc["servers"]:
-                    server_id = server["server_id"]
-                    
-                    # Pay interest to all players
-                    players_paid, total_interest = await Economy.pay_interest_to_all(
-                        bot.db, server_id, interest_rate
-                    )
-                    
-                    if players_paid > 0:
-                        logger.info(
-                            f"Paid {total_interest} credits of interest to {players_paid} players "
-                            f"on server {server_id} (Guild: {guild_id})"
-                        )
-                        
-                        # Try to send a notification to the configured economy channel
-                        try:
-                            # Find the server's economy channel if set
-                            economy_channel_id = server.get("economy_channel_id")
-                            if economy_channel_id:
-                                channel = bot.get_channel(int(economy_channel_id))
-                                if channel:
-                                    await channel.send(
-                                        f"💰 **Weekly Interest Paid**\n"
-                                        f"Paid {total_interest} credits of interest to {players_paid} players\n"
-                                        f"Current interest rate: {interest_rate*100:.1f}%"
-                                    )
-                        except Exception as e:
-                            logger.error(f"Error sending interest notification: {e}")
-    
-    except Exception as e:
-        logger.error(f"Error in interest payment task: {e}", exc_info=True)
-
-async def setup_background_tasks(bot):
-    """Set up background tasks for all registered servers"""
-    # Get all guilds with registered servers
-    cursor = bot.db.guilds.find({"servers": {"$exists": True, "$ne": []}})
-    
-    # Start weekly interest payment task (premium tier 2+ feature)
-    interest_task = asyncio.create_task(pay_interest_task(bot))
-    bot.background_tasks["interest_payment"] = interest_task
-    
-    # Start hourly rivalry tracker task (all tiers)
-    from utils.rivalry_tracker import RivalryTracker
-    rivalry_task = asyncio.create_task(RivalryTracker.schedule_rivalry_updates(bot))
-    bot.background_tasks["rivalry_tracker"] = rivalry_task
-    logger.info("Starting hourly rivalry (Prey/Nemesis) tracker")
-    
-    # Check if we have any guilds first - avoid errors if database is empty
-    guild_count = await bot.db.guilds.count_documents({"servers": {"$exists": True, "$ne": []}})
-    if guild_count == 0:
-        logger.info("No guilds with servers found in database. Skipping background task setup.")
+@bot.event
+async def on_command_error(ctx, error):
+    """Global error handler for traditional commands."""
+    if isinstance(error, commands.CommandNotFound):
         return
     
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"Missing required argument: {error.param.name}")
+        return
+    
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(f"Invalid argument: {error}")
+        return
+    
+    # Log the full error with traceback
+    logger.error(f"Command error in {ctx.command}: {error}", exc_info=error)
+    
+    # Send a user-friendly error message
+    await ctx.send(
+        f"❌ An error occurred while executing the command: `{error}`\n"
+        "The error has been logged and will be looked into."
+    )
+
+@bot.tree.error
+async def on_app_command_error(interaction, error):
+    """Global error handler for application (/) commands."""
+    if isinstance(error, commands.MissingRequiredArgument):
+        await interaction.response.send_message(
+            f"Missing required argument: {error.param.name}", 
+            ephemeral=True
+        )
+        return
+    
+    if isinstance(error, commands.BadArgument):
+        await interaction.response.send_message(
+            f"Invalid argument: {error}", 
+            ephemeral=True
+        )
+        return
+    
+    # Log the full error with traceback
+    command_name = interaction.command.name if interaction.command else "Unknown"
+    logger.error(f"App command error in {command_name}: {error}", exc_info=error)
+    
+    # Check if the interaction is still valid and not already responded to
     try:
-        async for guild_doc in cursor:
-            guild_id = guild_doc["guild_id"]
-            
-            # Check if the bot can actually access this guild
-            discord_guild = bot.get_guild(int(guild_id))
-            if not discord_guild:
-                logger.warning(f"Guild {guild_id} not found in bot's guilds. Skipping background tasks.")
-                continue
-            
-            # For each server in the guild, start monitoring
-            for server in guild_doc["servers"]:
-                try:
-                    server_id = server["server_id"]
-                    
-                    # Verify server has necessary channel configuration
-                    killfeed_channel_id = server.get("killfeed_channel_id")
-                    events_channel_id = server.get("events_channel_id")
-                    
-                    # Import the background task functions
-                    from cogs.killfeed import start_killfeed_monitor
-                    from cogs.events import start_events_monitor
-                    from utils.rivalry_tracker import RivalryTracker
-                    
-                    # Get guild premium tier
-                    premium_tier = guild_doc.get("premium_tier", 0)
-                    
-                    # Start killfeed monitor (available for all tiers)
-                    if killfeed_channel_id:
-                        killfeed_task = asyncio.create_task(
-                            start_killfeed_monitor(bot, guild_id, server_id)
-                        )
-                        task_name = f"killfeed_{guild_id}_{server_id}"
-                        bot.background_tasks[task_name] = killfeed_task
-                        logger.info(f"Starting killfeed monitor for server {server_id} in guild {guild_id}")
-                    else:
-                        logger.warning(f"No killfeed channel configured for server {server_id} in guild {guild_id}")
-                    
-                    # Start events monitor (premium tier 1+)
-                    if premium_tier >= 1 and events_channel_id:
-                        events_task = asyncio.create_task(
-                            start_events_monitor(bot, guild_id, server_id)
-                        )
-                        task_name = f"events_{guild_id}_{server_id}"
-                        bot.background_tasks[task_name] = events_task
-                        logger.info(f"Starting events monitor for server {server_id} in guild {guild_id}")
-                    elif premium_tier >= 1 and not events_channel_id:
-                        logger.warning(f"No events channel configured for server {server_id} in guild {guild_id}")
-                except Exception as server_error:
-                    logger.error(f"Error setting up background tasks for server {server.get('server_id', 'unknown')} in guild {guild_id}: {server_error}")
-                    continue
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "❌ An error occurred while executing the command. The error has been logged.",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                "❌ An error occurred while executing the command. The error has been logged.",
+                ephemeral=True
+            )
+    except discord.errors.NotFound:
+        logger.debug("Failed to respond to interaction - likely already timed out")
     except Exception as e:
-        logger.error(f"Error setting up background tasks: {e}", exc_info=True)
+        logger.error(f"Error while responding to error: {e}")
+
+async def load_cogs():
+    """Load all cogs (extensions) from the cogs directory."""
+    for filename in os.listdir('./cogs'):
+        if filename.endswith('.py') and not filename.startswith('_'):
+            # Strip the .py extension
+            cog_name = filename[:-3]
+            
+            try:
+                await bot.load_extension(f'cogs.{cog_name}')
+                logger.info(f"Loaded cog: {cog_name}")
+            except Exception as e:
+                logger.error(f"Failed to load cog {cog_name}: {e}", exc_info=True)
+
+async def startup():
+    """Initialize the bot and database."""
+    try:
+        # Initialize the database connection
+        logger.info("Initializing database connection...")
+        db = await initialize_db()
+        logger.info("Database connection established")
+        
+        # Load all cogs
+        logger.info("Loading cogs...")
+        await load_cogs()
+        
+        # Start the bot
+        logger.info("Starting bot...")
+        await bot.start(DISCORD_TOKEN)
+    except Exception as e:
+        logger.critical(f"Error during startup: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        # Close the database connection
+        await close_db_connection()
+
+if __name__ == "__main__":
+    # Run the startup process
+    logger.info("Tower of Temptation PvP Statistics Bot starting up...")
+    
+    # Set up asyncio event loop
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(startup())
+    except KeyboardInterrupt:
+        logger.info("Bot shutting down...")
+    except Exception as e:
+        logger.critical(f"Unhandled exception: {e}", exc_info=True)
+    finally:
+        loop.close()
+        logger.info("Bot has shut down. Goodbye!")

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any, Union
 import uuid
 
-from utils.database import get_db
+from utils.db import get_database, initialize_db
 from models.player import Player
 from models.economy import Economy
 
@@ -175,10 +175,14 @@ class Bounty:
             "source": source
         }
         
-        db = await get_db()
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
         
         # Insert the bounty into the database
-        await db.collections["bounties"].insert_one(bounty_data)
+        await db.bounties.insert_one(bounty_data)
         
         return cls(bounty_data)
     
@@ -193,8 +197,13 @@ class Bounty:
         Returns:
             Bounty object if found, None otherwise
         """
-        db = await get_db()
-        bounty_data = await db.collections["bounties"].find_one({"_id": str(bounty_id)})
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
+        bounty_data = await db.bounties.find_one({"_id": str(bounty_id)})
         
         if bounty_data:
             return cls(bounty_data)
@@ -213,8 +222,13 @@ class Bounty:
         Returns:
             List of active Bounty objects
         """
-        db = await get_db()
-        cursor = db.collections["bounties"].find({
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
+        cursor = db.bounties.find({
             "guild_id": str(guild_id),
             "server_id": str(server_id),
             "status": cls.STATUS_ACTIVE,
@@ -241,8 +255,13 @@ class Bounty:
         Returns:
             List of active Bounty objects for the target
         """
-        db = await get_db()
-        cursor = db.collections["bounties"].find({
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
+        cursor = db.bounties.find({
             "guild_id": str(guild_id),
             "server_id": str(server_id),
             "target_id": str(target_id),
@@ -270,8 +289,13 @@ class Bounty:
         Returns:
             List of Bounty objects placed by the user
         """
-        db = await get_db()
-        cursor = db.collections["bounties"].find({
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
+        cursor = db.bounties.find({
             "guild_id": str(guild_id),
             "server_id": str(server_id),
             "placed_by": str(placed_by)
@@ -297,8 +321,13 @@ class Bounty:
         Returns:
             List of Bounty objects claimed by the user
         """
-        db = await get_db()
-        cursor = db.collections["bounties"].find({
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
+        cursor = db.bounties.find({
             "guild_id": str(guild_id),
             "server_id": str(server_id),
             "claimed_by": str(claimed_by),
@@ -319,10 +348,15 @@ class Bounty:
         Returns:
             Number of bounties expired
         """
-        db = await get_db()
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
         now = datetime.utcnow()
         
-        result = await db.collections["bounties"].update_many(
+        result = await db.bounties.update_many(
             {
                 "status": cls.STATUS_ACTIVE,
                 "expires_at": {"$lt": now}
@@ -373,7 +407,12 @@ class Bounty:
                 
                 # Award the bounty to the killer
                 try:
-                    db = await get_db()
+                    # Get database connection
+                    try:
+                        db = get_database()
+                    except ConnectionError:
+                        db = await initialize_db()
+                        
                     killer_economy = await Economy.get_by_player(db, killer_id, server_id)
                     if killer_economy:
                         await killer_economy.add_currency(bounty.reward, "bounty_claimed", {
@@ -400,7 +439,11 @@ class Bounty:
             True if the player is linked, False otherwise
         """
         try:
-            db = await get_db()
+            # Get database connection
+            try:
+                db = get_database()
+            except ConnectionError:
+                db = await initialize_db()
             
             # Build the query
             query = {
@@ -414,7 +457,7 @@ class Bounty:
                 query["discord_id"] = str(discord_id)
             
             # Check if a link exists
-            link = await db.collections["player_links"].find_one(query)
+            link = await db.player_links.find_one(query)
             return link is not None
         except Exception as e:
             logger.error(f"Error checking player link: {e}")
@@ -437,12 +480,17 @@ class Bounty:
         Returns:
             List of dictionaries with potential bounty targets
         """
-        db = await get_db()
+        # Get database connection
+        try:
+            db = get_database()
+        except ConnectionError:
+            db = await initialize_db()
+            
         now = datetime.utcnow()
         time_window = now - timedelta(minutes=minutes)
         
         # Get all kills in the time window
-        cursor = db.collections["kills"].find({
+        cursor = db.kills.find({
             "guild_id": str(guild_id),
             "server_id": str(server_id),
             "timestamp": {"$gt": time_window}
@@ -522,8 +570,13 @@ class Bounty:
             True if successful, False otherwise
         """
         try:
-            db = await get_db()
-            result = await db.collections["bounties"].update_one(
+            # Get database connection
+            try:
+                db = get_database()
+            except ConnectionError:
+                db = await initialize_db()
+                
+            result = await db.bounties.update_one(
                 {"_id": str(self.id)},
                 {"$set": self.to_dict()}
             )

@@ -1,134 +1,100 @@
 """
-Database utility functions for MongoDB connections and operations
+MongoDB database connection utilities for the Tower of Temptation Discord Bot.
+
+This module provides a consistent interface for connecting to MongoDB
+and accessing collections with proper error handling and connection pooling.
 """
 import os
 import logging
 import asyncio
+from typing import Optional, Dict, Any, List, Union
 import motor.motor_asyncio
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-from typing import Optional, Dict, Any, List, TypeVar, Awaitable
-
-from config import MONGODB_SETTINGS, COLLECTIONS
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+import pymongo
 
 logger = logging.getLogger(__name__)
 
-# Define a TypeVar for the return type of database operations
-T = TypeVar('T')
+# Global database connection
+_db_client = None
+_db = None
 
-async def initialize_db():
-    """Initialize MongoDB connection and return database object"""
-    mongodb_uri = os.getenv("MONGODB_URI")
+async def initialize_db() -> AsyncIOMotorDatabase:
+    """Initialize connection to MongoDB database.
+    
+    Returns:
+        AsyncIOMotorDatabase: MongoDB database instance
+    
+    Raises:
+        ConnectionError: If unable to connect to MongoDB
+    """
+    global _db_client, _db
+    
+    # If already initialized and connected, return existing connection
+    if _db is not None and _db_client is not None:
+        return _db
+    
+    # Get MongoDB connection info from environment
+    mongodb_uri = os.environ.get("MONGODB_URI")
+    db_name = os.environ.get("MONGODB_DB", "tower_of_temptation")
+    
     if not mongodb_uri:
-        logger.critical("MONGODB_URI environment variable not set. Exiting.")
-        raise ValueError("MONGODB_URI environment variable not set")
+        logger.critical("MONGODB_URI environment variable not set")
+        raise ConnectionError("MongoDB URI not configured")
     
     try:
-        # Create client with configuration
-        client = motor.motor_asyncio.AsyncIOMotorClient(
-            mongodb_uri, 
-            **MONGODB_SETTINGS
+        # Create a new client and connect
+        logger.info(f"Connecting to MongoDB database: {db_name}")
+        _db_client = motor.motor_asyncio.AsyncIOMotorClient(
+            mongodb_uri,
+            serverSelectionTimeoutMS=5000,  # 5 second timeout
+            connectTimeoutMS=10000,         # 10 second timeout
+            socketTimeoutMS=45000,          # 45 second timeout
+            maxPoolSize=100,                # Connection pool size
+            retryWrites=True                # Retry writes on failure
         )
         
-        # Check connection
-        await client.admin.command('ping')
-        logger.info("Connected to MongoDB successfully")
+        # Verify connection works by checking server info
+        await _db_client.server_info()
         
         # Get database
-        db_name = os.getenv("MONGODB_DB", "pvp_stats_bot")
-        db = client[db_name]
+        _db = _db_client[db_name]
+        logger.info("Successfully connected to MongoDB")
         
-        # Create collections and indexes
-        await create_collections_and_indexes(db)
+        # Return the database
+        return _db
         
-        return db
-    except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-        logger.critical(f"Failed to connect to MongoDB: {e}")
-        raise
+    except (pymongo.errors.ServerSelectionTimeoutError, 
+            pymongo.errors.ConnectionFailure) as e:
+        logger.critical(f"Failed to connect to MongoDB: {str(e)}")
+        raise ConnectionError(f"Failed to connect to MongoDB: {str(e)}")
+    except Exception as e:
+        logger.critical(f"Unexpected error connecting to MongoDB: {str(e)}")
+        raise ConnectionError(f"Unexpected error connecting to MongoDB: {str(e)}")
 
-async def db_operation_with_timeout(operation: Awaitable[T], timeout: float = 2.0, operation_name: str = "db_operation") -> Optional[T]:
-    """Execute a database operation with timeout protection
+def get_database() -> AsyncIOMotorDatabase:
+    """Get MongoDB database instance.
     
-    Args:
-        operation: The database operation coroutine to execute
-        timeout: Timeout in seconds (default: 2.0)
-        operation_name: Name of the operation for logging
-        
     Returns:
-        The result of the operation, or None if timeout or error occurs
+        AsyncIOMotorDatabase: MongoDB database instance
+    
+    Raises:
+        ConnectionError: If database is not initialized
     """
-    try:
-        return await asyncio.wait_for(operation, timeout=timeout)
-    except asyncio.TimeoutError:
-        logger.warning(f"Timeout in database operation: {operation_name} (timeout: {timeout}s)")
-        return None
-    except Exception as e:
-        logger.error(f"Error in database operation {operation_name}: {e}", exc_info=True)
-        return None
+    global _db
+    
+    if _db is None:
+        error_msg = "Database not initialized. Call initialize_db() first."
+        logger.error(error_msg)
+        raise ConnectionError(error_msg)
+        
+    return _db
 
-async def create_collections_and_indexes(db):
-    """Create necessary collections and indexes"""
-    try:
-        # Ensure collections exist (MongoDB creates them on first access)
-        for collection_name in COLLECTIONS.values():
-            try:
-                await db_operation_with_timeout(
-                    db.create_collection(collection_name),
-                    timeout=3.0,
-                    operation_name=f"create_collection({collection_name})"
-                )
-                logger.info(f"Created collection: {collection_name}")
-            except:
-                # Collection already exists
-                pass
-        
-        # Create indexes
-        # Guild collection indexes
-        await db[COLLECTIONS["guilds"]].create_index("guild_id", unique=True)
-        
-        # Players collection indexes
-        await db[COLLECTIONS["players"]].create_index([
-            ("server_id", 1),
-            ("player_id", 1)
-        ], unique=True)
-        await db[COLLECTIONS["players"]].create_index("player_name")
-        
-        # Kills collection indexes
-        await db[COLLECTIONS["kills"]].create_index([
-            ("server_id", 1),
-            ("timestamp", 1)
-        ])
-        await db[COLLECTIONS["kills"]].create_index("killer_id")
-        await db[COLLECTIONS["kills"]].create_index("victim_id")
-        
-        # Events collection indexes
-        await db[COLLECTIONS["events"]].create_index([
-            ("server_id", 1),
-            ("timestamp", 1)
-        ])
-        await db[COLLECTIONS["events"]].create_index("event_type")
-        
-        # Connections collection indexes
-        await db[COLLECTIONS["connections"]].create_index([
-            ("server_id", 1),
-            ("player_id", 1),
-            ("timestamp", 1)
-        ])
-        
-        # Economy collection indexes
-        await db[COLLECTIONS["economy"]].create_index([
-            ("server_id", 1),
-            ("player_id", 1)
-        ], unique=True)
-        
-        # Transactions collection indexes
-        await db[COLLECTIONS["transactions"]].create_index([
-            ("server_id", 1),
-            ("player_id", 1),
-            ("timestamp", 1)
-        ])
-        await db[COLLECTIONS["transactions"]].create_index("source")
-        
-        logger.info("Created all necessary indexes")
-    except Exception as e:
-        logger.error(f"Error creating collections or indexes: {e}", exc_info=True)
-        raise
+async def close_db_connection():
+    """Close MongoDB connection."""
+    global _db_client, _db
+    
+    if _db_client is not None:
+        logger.info("Closing MongoDB connection")
+        _db_client.close()
+        _db_client = None
+        _db = None
