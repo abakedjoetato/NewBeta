@@ -239,8 +239,8 @@ class RivalriesCog(commands.Cog):
     async def _rivalries_player(
         self,
         interaction: discord.Interaction,
-        server_id: Optional[str] = None,
-        player_name: str
+        player_name: str,
+        server_id: Optional[str] = None
     ) -> None:
         """View rivalries for a specific player
         

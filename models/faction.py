@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 # Type variables
 F = TypeVar('F', bound='Faction')
 
+# Faction roles
+FACTION_ROLES = {
+    "LEADER": "leader",
+    "OFFICER": "officer",
+    "MEMBER": "member",
+    "RECRUIT": "recruit"
+}
+
 class Faction:
     """Faction class for organizing players into teams"""
     

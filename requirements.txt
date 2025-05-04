@@ -32,3 +32,8 @@ pymongo
 discord.py
 motor
 pymongo
+flask
+flask-sqlalchemy
+gunicorn
+psycopg2-binary
+flask-login

@@ -1,109 +1,66 @@
 """
-Database models for the Tower of Temptation PvP Statistics Bot web dashboard.
-
-This module provides:
-1. User model for authentication
-2. API keys for external access
-3. Webhook configurations
+Database models for the Flask web app
 """
-import uuid
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
-
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from web.app import db
+# Import db from a separate module to avoid circular imports
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app import db
 
 class User(UserMixin, db.Model):
-    """User model for web dashboard authentication"""
+    """User model for authentication"""
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256))
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
-    api_keys = db.relationship('ApiKey', backref='user', lazy=True, cascade="all, delete-orphan")
-    
-    def set_password(self, password: str) -> None:
-        """Set user password"""
+    def set_password(self, password):
+        """Set password hash"""
         self.password_hash = generate_password_hash(password)
     
-    def check_password(self, password: str) -> bool:
-        """Check if password is correct"""
+    def check_password(self, password):
+        """Check password against hash"""
         return check_password_hash(self.password_hash, password)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert user to dictionary"""
-        return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'is_admin': self.is_admin,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat()
-        }
+        
+    def __repr__(self):
+        return f'<User {self.username}>'
 
-class ApiKey(db.Model):
-    """API key model for external access to the API"""
+class BotStat(db.Model):
+    """Statistics about the bot's operation"""
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(64), nullable=False)
-    key = db.Column(db.String(64), unique=True, nullable=False, index=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_used_at = db.Column(db.DateTime)
-    expires_at = db.Column(db.DateTime, nullable=True)
-    is_active = db.Column(db.Boolean, default=True)
+    guild_count = db.Column(db.Integer, default=0)
+    user_count = db.Column(db.Integer, default=0)
+    command_count = db.Column(db.Integer, default=0)
+    uptime = db.Column(db.Float, default=0)  # in seconds
+    cpu_usage = db.Column(db.Float, default=0)  # percentage
+    memory_usage = db.Column(db.Float, default=0)  # in MB
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
-    @classmethod
-    def generate_key(cls) -> str:
-        """Generate a new API key"""
-        return str(uuid.uuid4())
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert API key to dictionary"""
-        return {
-            'id': self.id,
-            'name': self.name,
-            'key': self.key,
-            'user_id': self.user_id,
-            'created_at': self.created_at.isoformat(),
-            'last_used_at': self.last_used_at.isoformat() if self.last_used_at else None,
-            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
-            'is_active': self.is_active
-        }
+    def __repr__(self):
+        return f'<BotStat {self.timestamp}>'
 
-class WebhookConfig(db.Model):
-    """Webhook configuration for Discord event notifications"""
+class ServerStat(db.Model):
+    """Statistics about specific game servers"""
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(64), nullable=False)
-    url = db.Column(db.String(255), nullable=False)
     server_id = db.Column(db.String(64), nullable=False)
-    events = db.Column(db.String(255), nullable=False)  # Comma-separated event types
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    is_active = db.Column(db.Boolean, default=True)
+    guild_id = db.Column(db.BigInteger, nullable=False)
+    player_count = db.Column(db.Integer, default=0)
+    kill_count = db.Column(db.Integer, default=0)
+    death_count = db.Column(db.Integer, default=0)
+    suicide_count = db.Column(db.Integer, default=0)
+    faction_count = db.Column(db.Integer, default=0)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
-    def get_events(self) -> List[str]:
-        """Get list of events"""
-        return self.events.split(',')
+    # Create index on server_id and timestamp for faster lookups
+    __table_args__ = (
+        db.Index('idx_server_timestamp', 'server_id', 'timestamp'),
+    )
     
-    def set_events(self, events: List[str]) -> None:
-        """Set events from list"""
-        self.events = ','.join(events)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert webhook configuration to dictionary"""
-        return {
-            'id': self.id,
-            'name': self.name,
-            'url': self.url,
-            'server_id': self.server_id,
-            'events': self.get_events(),
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'is_active': self.is_active
-        }
+    def __repr__(self):
+        return f'<ServerStat {self.server_id} {self.timestamp}>'
