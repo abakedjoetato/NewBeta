@@ -6,6 +6,7 @@ This module defines the Economy data structure for player currency and economic 
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, ClassVar, List
+import uuid
 
 from models.base_model import BaseModel
 

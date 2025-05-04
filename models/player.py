@@ -6,6 +6,7 @@ This module defines the Player data structure for game players.
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, ClassVar, List
+import uuid
 
 from models.base_model import BaseModel
 

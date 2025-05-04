@@ -6,6 +6,7 @@ This module defines the Guild data structure for Discord guilds.
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, ClassVar, List
+import uuid
 
 from models.base_model import BaseModel
 

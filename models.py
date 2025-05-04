@@ -6,6 +6,7 @@ These are not SQLAlchemy models but rather document schemas for MongoDB.
 """
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union, TypeVar, ClassVar, Type
 
@@ -110,7 +111,7 @@ class Guild(BaseModel):
         Returns:
             Guild object or None if not found
         """
-        document = await db.guilds.find_one({"guild_id": guild_id})
+        document = await db[cls.collection_name].find_one({"guild_id": guild_id})
         return cls.from_document(document)
 
 
@@ -195,7 +196,7 @@ class Player(BaseModel):
         Returns:
             Player object or None if not found
         """
-        document = await db.players.find_one({"server_id": server_id, "player_id": player_id})
+        document = await db[cls.collection_name].find_one({"server_id": server_id, "player_id": player_id})
         return cls.from_document(document)
 
 
@@ -227,8 +228,100 @@ class PlayerLink(BaseModel):
 
 
 class Bounty(BaseModel):
+
+    # SOURCE_PLAYER constant
+    SOURCE_PLAYER = "player"
+    # SOURCE_AUTO constant
+    SOURCE_AUTO = "auto"
+    # SOURCE_ADMIN constant
+    SOURCE_ADMIN = "admin"
+    # STATUS_ACTIVE constant
+    STATUS_ACTIVE = "active"
+    # STATUS_CLAIMED constant
+    STATUS_CLAIMED = "claimed"
+    # STATUS_EXPIRED constant
+    STATUS_EXPIRED = "expired"
+    # STATUS_CANCELLED constant
+    STATUS_CANCELLED = "cancelled"
+
     """Bounty information"""
     collection_name = "bounties"
+    
+    # Bounty source constants
+    SOURCE_PLAYER = "player"
+    SOURCE_AUTO = "auto"
+    SOURCE_ADMIN = "admin"
+    
+    # Status constants
+    STATUS_ACTIVE = "active"
+    STATUS_CLAIMED = "claimed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CANCELLED = "cancelled"
+    
+    @classmethod
+    async def create(cls, db, guild_id: str, server_id: str, target_id: str, 
+                     target_name: str, placed_by: str, placed_by_name: str, 
+                     reason: str = None, reward: int = 100, source: str = "player",
+                     lifespan_hours: float = 1.0) -> Optional['Bounty']:
+        """Create a new bounty
+        
+        Args:
+            db: Database connection
+            guild_id: Guild ID
+            server_id: Server ID
+            target_id: Target player ID
+            target_name: Target player name
+            placed_by: Discord ID of placer
+            placed_by_name: Discord name of placer
+            reason: Reason for bounty
+            reward: Bounty reward amount
+            source: Bounty source (player, auto, admin)
+            lifespan_hours: Bounty lifespan in hours
+            
+        Returns:
+            Bounty object or None if creation failed
+        """
+        now = datetime.utcnow()
+        expires_at = now + timedelta(hours=lifespan_hours)
+        
+        # Create bounty
+        bounty = cls(
+            guild_id=guild_id,
+            server_id=server_id,
+            target_id=target_id,
+            target_name=target_name,
+            placed_by=placed_by,
+            placed_by_name=placed_by_name,
+            reason=reason,
+            reward=reward,
+            status=cls.STATUS_ACTIVE,
+            source=source,
+            created_at=now,
+            expires_at=expires_at
+        )
+        
+        # Insert into database
+        try:
+            result = await db[cls.collection_name].insert_one(bounty.to_document())
+            bounty._id = result.inserted_id
+            return bounty
+        except Exception as e:
+            logger.error(f"Error creating bounty: {e}")
+            return None
+            
+    @classmethod
+    async def get_by_id(cls, db, bounty_id: str) -> Optional['Bounty']:
+        """Get a bounty by its ID
+        
+        Args:
+            db: Database connection
+            bounty_id: Bounty ID
+            
+        Returns:
+            Bounty object or None if not found
+        """
+        document = await db[cls.collection_name].find_one({"id": bounty_id})
+        return cls.from_document(document)
     
     def __init__(
         self,
@@ -250,6 +343,8 @@ class Bounty(BaseModel):
         **kwargs
     ):
         self._id = None  # MongoDB ObjectId
+        self.id = kwargs.get("id", str(uuid.uuid4())[:8])  # Short ID for references
+        self.id = kwargs.get("id", str(uuid.uuid4())[:8])  # Short ID for references
         self.guild_id = guild_id
         self.server_id = server_id
         self.target_id = target_id
@@ -277,6 +372,73 @@ class Bounty(BaseModel):
         # Add any additional attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    @classmethod
+    async def create(cls, db, guild_id: str, server_id: str, target_id: str, 
+                     target_name: str, placed_by: str, placed_by_name: str, 
+                     reason: str = None, reward: int = 100, source: str = "player",
+                     lifespan_hours: float = 1.0) -> Optional['Bounty']:
+        """Create a new bounty
+        
+        Args:
+            db: Database connection
+            guild_id: Guild ID
+            server_id: Server ID
+            target_id: Target player ID
+            target_name: Target player name
+            placed_by: Discord ID of placer
+            placed_by_name: Discord name of placer
+            reason: Reason for bounty
+            reward: Bounty reward amount
+            source: Bounty source (player, auto, admin)
+            lifespan_hours: Bounty lifespan in hours
+            
+        Returns:
+            Bounty object or None if creation failed
+        """
+        now = datetime.utcnow()
+        expires_at = now + timedelta(hours=lifespan_hours)
+        
+        # Create bounty
+        bounty = cls(
+            guild_id=guild_id,
+            server_id=server_id,
+            target_id=target_id,
+            target_name=target_name,
+            placed_by=placed_by,
+            placed_by_name=placed_by_name,
+            reason=reason,
+            reward=reward,
+            status=cls.STATUS_ACTIVE,
+            source=source,
+            created_at=now,
+            expires_at=expires_at
+        )
+        
+        # Insert into database
+        try:
+            result = await db[cls.collection_name].insert_one(bounty.to_document())
+            bounty._id = result.inserted_id
+            return bounty
+        except Exception as e:
+            logger.error(f"Error creating bounty: {e}")
+            return None
+    
+
+    @classmethod
+    async def get_by_id(cls, db, bounty_id: str) -> Optional['Bounty']:
+        """Get a bounty by its ID
+        
+        Args:
+            db: Database connection
+            bounty_id: Bounty ID
+            
+        Returns:
+            Bounty object or None if not found
+        """
+        document = await db[cls.collection_name].find_one({"id": bounty_id})
+        return cls.from_document(document)
+    
 
 
 class Kill(BaseModel):
@@ -346,8 +508,27 @@ class BotStatus(BaseModel):
 
 
 class EconomyTransaction(BaseModel):
+
+    # TYPE_BOUNTY_PLACED constant
+    TYPE_BOUNTY_PLACED = "bounty_placed"
+    # TYPE_BOUNTY_CLAIMED constant
+    TYPE_BOUNTY_CLAIMED = "bounty_claimed"
+    # TYPE_BOUNTY_EXPIRED constant
+    TYPE_BOUNTY_EXPIRED = "bounty_expired"
+    # TYPE_BOUNTY_CANCELLED constant
+    TYPE_BOUNTY_CANCELLED = "bounty_cancelled"
+    # TYPE_ADMIN_ADJUSTMENT constant
+    TYPE_ADMIN_ADJUSTMENT = "admin_adjustment"
+
     """Tracks in-game currency transactions"""
     collection_name = "economy"
+    
+    # Transaction types
+    TYPE_BOUNTY_PLACED = "bounty_placed"
+    TYPE_BOUNTY_CLAIMED = "bounty_claimed"
+    TYPE_BOUNTY_EXPIRED = "bounty_expired"
+    TYPE_BOUNTY_CANCELLED = "bounty_cancelled"
+    TYPE_ADMIN_ADJUSTMENT = "admin_adjustment"
     
     def __init__(
         self,
@@ -361,6 +542,8 @@ class EconomyTransaction(BaseModel):
         **kwargs
     ):
         self._id = None  # MongoDB ObjectId
+        self.id = kwargs.get("id", str(uuid.uuid4())[:8])  # Short ID for references
+        self.id = kwargs.get("id", str(uuid.uuid4())[:8])  # Short ID for references
         self.discord_id = discord_id
         self.guild_id = guild_id
         self.server_id = server_id
@@ -372,3 +555,66 @@ class EconomyTransaction(BaseModel):
         # Add any additional attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
+    
+    @classmethod
+    async def create(cls, db, discord_id: str, guild_id: str, 
+                    amount: int, type: str, 
+                    server_id: str = None, 
+                    description: str = None) -> Optional['EconomyTransaction']:
+        """Create a new economy transaction
+        
+        Args:
+            db: Database connection
+            discord_id: Discord user ID
+            guild_id: Guild ID
+            amount: Transaction amount
+            type: Transaction type
+            server_id: Optional server ID
+            description: Optional transaction description
+            
+        Returns:
+            Transaction object or None if creation failed
+        """
+        # Create transaction
+        transaction = cls(
+            discord_id=discord_id,
+            guild_id=guild_id,
+            server_id=server_id,
+            amount=amount,
+            type=type,
+            timestamp=datetime.utcnow(),
+            description=description
+        )
+        
+        # Insert into database
+        try:
+            result = await db[cls.collection_name].insert_one(transaction.to_document())
+            transaction._id = result.inserted_id
+            return transaction
+        except Exception as e:
+            logger.error(f"Error creating transaction: {e}")
+            return None
+    
+    @classmethod
+    async def get_by_player(cls, db, discord_id: str, guild_id: str = None) -> List['EconomyTransaction']:
+        """Get all transactions for a player
+        
+        Args:
+            db: Database connection
+            discord_id: Discord user ID
+            guild_id: Optional guild ID to filter by
+            
+        Returns:
+            List of transactions
+        """
+        query = {"discord_id": discord_id}
+        if guild_id:
+            query["guild_id"] = guild_id
+            
+        cursor = db[cls.collection_name].find(query).sort("timestamp", -1)
+        
+        transactions = []
+        async for document in cursor:
+            transactions.append(cls.from_document(document))
+            
+        return transactions
