@@ -51,13 +51,25 @@ class BountiesCog(commands.GroupCog, name="bounty"):
         """Background task to expire old bounties"""
         try:
             # Get database connection
-            from utils.database import get_db
-            db = await get_db()
+            from utils.database import get_db, DatabaseManager
             
-            # Expire old bounties
-            expired_count = await Bounty.expire_old_bounties(db)
-            if expired_count > 0:
-                logger.info(f"Expired {expired_count} bounties")
+            # Safely get database with validation
+            try:
+                db = await get_db()
+                if db is None or not isinstance(db, DatabaseManager) or not db._connected:
+                    logger.warning("Database not properly initialized, skipping expired bounties check")
+                    return
+                
+                # Explicitly ensure DB connection before proceeding
+                await db.ensure_connected()
+                
+                # Expire old bounties
+                expired_count = await Bounty.expire_old_bounties(db)
+                if expired_count > 0:
+                    logger.info(f"Expired {expired_count} bounties")
+            except RuntimeError as re:
+                logger.warning(f"Database not ready: {re}")
+                return
         except Exception as e:
             logger.error(f"Error in check_expired_bounties: {e}", exc_info=True)
             
@@ -65,71 +77,81 @@ class BountiesCog(commands.GroupCog, name="bounty"):
     async def check_auto_bounties(self):
         """Background task to create automatic bounties"""
         try:
-            # Get all guilds
-            from utils.database import get_db
-            db = await get_db()
-            guilds_cursor = db.db.guilds.find({})
+            # Get database safely
+            from utils.database import get_db, DatabaseManager
             
-            # Iterate through guilds
-            async for guild_data in guilds_cursor:
-                guild_id = str(guild_data.get("guild_id"))
+            try:
+                db = await get_db()
+                if db is None or not isinstance(db, DatabaseManager) or not db._connected:
+                    logger.warning("Database not properly initialized, skipping auto bounties check")
+                    return
                 
-                # Check if auto-bounties are enabled
-                auto_bounty = guild_data.get("auto_bounty", False)
-                if not auto_bounty:
-                    continue
-                    
-                # Get guild settings
-                guild = Guild(db, guild_data)
-                if not guild.premium_tier >= 2:  # Auto-bounty requires premium tier 2+
-                    continue
-                    
-                # Get auto-bounty settings
-                auto_bounty_settings = guild_data.get("auto_bounty_settings", {})
-                kill_threshold = auto_bounty_settings.get("kill_threshold", 5)
-                repeat_threshold = auto_bounty_settings.get("repeat_threshold", 3)
-                time_window = auto_bounty_settings.get("time_window", 10)  # minutes
-                reward_amount = auto_bounty_settings.get("reward_amount", 100)
+                # Explicitly ensure DB connection before proceeding
+                await db.ensure_connected()
                 
-                # Process each server
-                for server_id in guild.servers:
-                    try:
-                        # Get potential bounty targets
-                        targets = await Bounty.get_player_stats_for_bounty(
-                            guild_id, 
-                            server_id, 
-                            minutes=time_window,
-                            kill_threshold=kill_threshold,
-                            repeat_threshold=repeat_threshold
-                        )
+                # Now safely access collections
+                guilds_cursor = db.db.guilds.find({})
+                
+                # Iterate through guilds
+                async for guild_data in guilds_cursor:
+                    guild_id = str(guild_data.get("guild_id"))
+                    
+                    # Check if auto-bounties are enabled
+                    auto_bounty = guild_data.get("auto_bounty", False)
+                    if not auto_bounty:
+                        continue
                         
-                        for target in targets:
-                            # Check if we should create a bounty
-                            if target["killstreak"] >= kill_threshold:
-                                # Create killstreak bounty
-                                reason = f"Killstreak of {target['killstreak']} in {time_window} minutes"
-                                await self._create_auto_bounty(
-                                    guild_id, 
-                                    server_id,
-                                    target["player_id"],
-                                    target["player_name"],
-                                    reason,
-                                    reward_amount,
-                                    "killstreak"
-                                )
-                            elif target.get("target_fixation", 0) >= repeat_threshold:
-                                # Create target fixation bounty
-                                victim_name = target.get("fixation_target_name", "Unknown")
-                                reason = f"Target fixation on {victim_name} ({target['target_fixation']} kills)"
-                                await self._create_auto_bounty(
-                                    guild_id, 
-                                    server_id,
-                                    target["player_id"],
-                                    target["player_name"],
-                                    reason,
-                                    reward_amount,
-                                    "fixation"
-                                )
+                    # Get guild settings
+                    guild = Guild(db, guild_data)
+                    if not guild.premium_tier >= 2:  # Auto-bounty requires premium tier 2+
+                        continue
+                        
+                    # Get auto-bounty settings
+                    auto_bounty_settings = guild_data.get("auto_bounty_settings", {})
+                    kill_threshold = auto_bounty_settings.get("kill_threshold", 5)
+                    repeat_threshold = auto_bounty_settings.get("repeat_threshold", 3)
+                    time_window = auto_bounty_settings.get("time_window", 10)  # minutes
+                    reward_amount = auto_bounty_settings.get("reward_amount", 100)
+                    
+                    # Process each server
+                    for server_id in guild.servers:
+                        try:
+                            # Get potential bounty targets
+                            targets = await Bounty.get_player_stats_for_bounty(
+                                guild_id, 
+                                server_id, 
+                                minutes=time_window,
+                                kill_threshold=kill_threshold,
+                                repeat_threshold=repeat_threshold
+                            )
+                            
+                            for target in targets:
+                                # Check if we should create a bounty
+                                if target["killstreak"] >= kill_threshold:
+                                    # Create killstreak bounty
+                                    reason = f"Killstreak of {target['killstreak']} in {time_window} minutes"
+                                    await self._create_auto_bounty(
+                                        guild_id, 
+                                        server_id,
+                                        target["player_id"],
+                                        target["player_name"],
+                                        reason,
+                                        reward_amount,
+                                        "killstreak"
+                                    )
+                                elif target.get("target_fixation", 0) >= repeat_threshold:
+                                    # Create target fixation bounty
+                                    victim_name = target.get("fixation_target_name", "Unknown")
+                                    reason = f"Target fixation on {victim_name} ({target['target_fixation']} kills)"
+                                    await self._create_auto_bounty(
+                                        guild_id, 
+                                        server_id,
+                                        target["player_id"],
+                                        target["player_name"],
+                                        reason,
+                                        reward_amount,
+                                        "fixation"
+                                    )
                     except Exception as e:
                         logger.error(f"Error processing auto-bounties for server {server_id}: {e}", exc_info=True)
         except Exception as e:

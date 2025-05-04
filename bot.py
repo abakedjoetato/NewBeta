@@ -224,19 +224,37 @@ async def initialize_bot(force_sync=False):
     if force_sync:
         logger.info("Syncing commands globally...")
         try:
+            # Ensure bot is ready before syncing commands
+            if not bot.is_ready():
+                logger.warning("Bot not ready, waiting before syncing commands")
+                await bot.wait_until_ready()
+                logger.info("Bot ready, proceeding with command sync")
+            
+            # Wait a short time to ensure all internal Discord.py caches are initialized
+            await asyncio.sleep(2)
+            
             # Clear commands in development guild if specified
             if HOME_GUILD_ID:
-                guild = discord.Object(id=int(HOME_GUILD_ID))
-                bot.tree.clear_commands(guild=guild)
-                await bot.tree.sync(guild=guild)
-                logger.info(f"Cleared and synced commands in development guild {HOME_GUILD_ID}")
+                try:
+                    guild = discord.Object(id=int(HOME_GUILD_ID))
+                    bot.tree.clear_commands(guild=guild)
+                    await bot.tree.sync(guild=guild)
+                    logger.info(f"Cleared and synced commands in development guild {HOME_GUILD_ID}")
+                except Exception as guild_error:
+                    logger.error(f"Error syncing guild commands: {guild_error}", exc_info=True)
             
-            # Sync commands globally
-            bot.tree.clear_commands()
-            await bot.tree.sync()
-            logger.info("Commands synced globally")
+            # Sync commands globally with additional protection
+            try:
+                bot.tree.clear_commands()
+                await asyncio.sleep(1)  # Rate limit protection
+                await bot.tree.sync()
+                logger.info("Commands synced globally")
+            except Exception as global_error:
+                logger.error(f"Error syncing global commands: {global_error}", exc_info=True)
+                
         except Exception as e:
-            logger.error(f"Error syncing commands: {e}", exc_info=True)
+            logger.error(f"Error in command sync process: {e}", exc_info=True)
+            # Don't let this error block bot startup, it can sync later
     
     return bot
 
@@ -245,11 +263,38 @@ async def startup():
     try:
         # Initialize the bot
         logger.info("Initializing bot...")
-        await initialize_bot()
+        initialized_bot = await initialize_bot(force_sync=False)  # Initialize without syncing
         
-        # Start the bot
+        # Start the bot first
         logger.info("Starting bot...")
-        await bot.start(DISCORD_TOKEN)
+        # Run the bot in the background
+        bot_task = asyncio.create_task(initialized_bot.start(DISCORD_TOKEN))
+        
+        # Wait for the bot to be fully ready
+        await asyncio.sleep(5)
+        
+        # Now sync commands when bot is surely ready
+        if initialized_bot.is_ready():
+            logger.info("Bot is ready, syncing commands now...")
+            try:
+                # Try syncing global commands
+                await initialized_bot.tree.sync()
+                logger.info("Successfully synced global commands")
+                
+                # If home guild is set, sync there too
+                if HOME_GUILD_ID:
+                    guild = discord.Object(id=int(HOME_GUILD_ID))
+                    await initialized_bot.tree.sync(guild=guild)
+                    logger.info(f"Successfully synced commands to home guild {HOME_GUILD_ID}")
+            except Exception as sync_error:
+                logger.error(f"Failed to sync commands: {sync_error}", exc_info=True)
+                logger.info("Bot will continue running, commands may not be fully available")
+        else:
+            logger.warning("Bot not ready after waiting, commands will not be synced now")
+        
+        # Wait for the bot to finish (which should be never unless it disconnects)
+        await bot_task
+        
     except Exception as e:
         logger.critical(f"Error during startup: {e}", exc_info=True)
         sys.exit(1)
