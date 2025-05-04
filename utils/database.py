@@ -10,7 +10,7 @@ import asyncio
 import motor.motor_asyncio
 from typing import Optional, Dict, Any, List, Union
 from datetime import datetime
-from bson.objectid import ObjectId
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 

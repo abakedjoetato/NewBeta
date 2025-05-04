@@ -15,6 +15,10 @@ class BaseModel:
     """Base model for MongoDB documents"""
     collection_name: ClassVar[str] = None
     
+    def __init__(self):
+        """Initialize the base model with default attributes"""
+        self._id = None
+    
     @classmethod
     def from_document(cls: Type[T], document: Dict[str, Any]) -> T:
         """Create a model instance from a MongoDB document

@@ -9,139 +9,157 @@ This provides:
 """
 import os
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from datetime import datetime
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, session, abort
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import generate_password_hash, check_password_hash
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     pass
 
-db = SQLAlchemy(model_class=Base)
-app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "pvpstats_dev_secret")
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-# Configure the database
+db = SQLAlchemy(model_class=Base)
+# create the app
+app = Flask(__name__)
+app.secret_key = os.environ.get("SESSION_SECRET")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1) # needed for url_for to generate with https
+
+# configure the database, relative to the app instance folder
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_recycle": 300,
     "pool_pre_ping": True,
 }
-
-# Initialize the app with extensions
+# initialize the app with the extension, flask-sqlalchemy >= 3.0.x
 db.init_app(app)
 
-# Routes
+with app.app_context():
+    # Make sure to import the models here or their tables won't be created
+    import models_sql  # noqa: F401
+
+    db.create_all()
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+
 @app.route('/')
 def home():
     """Home page"""
-    return render_template('index.html', title="Tower of Temptation PvP Stats")
+    return render_template('index.html')
+
 
 @app.route('/stats')
 def stats():
     """Bot statistics page"""
-    return render_template('stats.html', title="Bot Statistics")
+    return render_template('stats.html')
+
 
 @app.route('/leaderboards')
 def leaderboards():
     """Player leaderboards page"""
-    return render_template('leaderboards.html', title="Leaderboards")
+    return render_template('leaderboards.html')
+
 
 @app.route('/rivalries')
 def rivalries():
     """Rivalries page"""
-    return render_template('rivalries.html', title="Rivalries")
+    return render_template('rivalries.html')
+
 
 @app.route('/admin')
 def admin():
     """Admin dashboard"""
-    # Check if user is authenticated
-    if not session.get('is_authenticated'):
-        return redirect(url_for('login'))
-    
-    return render_template('admin.html', title="Admin Dashboard")
+    # Check if user is logged in and is admin
+    # if not logged in, redirect to login page
+    return render_template('admin.html')
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page"""
     if request.method == 'POST':
+        # Handle login
         username = request.form.get('username')
         password = request.form.get('password')
         
-        # Simple authentication for dev
-        if username == 'admin' and password == 'temppassword':
-            session['is_authenticated'] = True
-            flash('Login successful', 'success')
-            return redirect(url_for('admin'))
-        else:
-            flash('Invalid credentials', 'error')
-    
-    return render_template('login.html', title="Login")
+        # Handle login logic here
+        flash('Login successful', 'success')
+        return redirect(url_for('home'))
+        
+    return render_template('login.html')
+
 
 @app.route('/logout')
 def logout():
     """Logout"""
-    session.pop('is_authenticated', None)
+    # Clear session
+    session.clear()
     flash('You have been logged out', 'info')
     return redirect(url_for('home'))
 
-# API Routes
+
 @app.route('/api/bot-status')
 def api_bot_status():
     """API endpoint for bot status"""
-    # Mock data for now
     status = {
-        'is_online': True,
-        'uptime': '3 days, 4 hours',
-        'guilds': 12,
-        'commands_used': 1458,
-        'version': '1.2.3'
+        'status': 'online',
+        'uptime': '3 days, 2 hours',
+        'guilds': 5,
+        'commands_processed': 1250,
+        'last_updated': datetime.now().isoformat()
     }
     return jsonify(status)
+
 
 @app.route('/api/recent-activity')
 def api_recent_activity():
     """API endpoint for recent activity"""
-    # Mock data for now
     activity = [
-        {'event': 'kill', 'player': 'Player1', 'target': 'Player2', 'time': '2 minutes ago'},
-        {'event': 'bounty_claimed', 'player': 'Player3', 'reward': 500, 'time': '15 minutes ago'},
-        {'event': 'bounty_placed', 'player': 'Player4', 'target': 'Player1', 'reward': 1000, 'time': '30 minutes ago'},
+        {
+            'type': 'kill',
+            'killer': 'Player1',
+            'victim': 'Player2',
+            'weapon': 'Sniper Rifle',
+            'timestamp': datetime.now().isoformat()
+        },
+        {
+            'type': 'bounty_placed',
+            'target': 'Player3',
+            'placed_by': 'Player1',
+            'amount': 500,
+            'timestamp': datetime.now().isoformat()
+        }
     ]
     return jsonify(activity)
 
-# Error handlers
+
 @app.errorhandler(404)
 def page_not_found(e):
     """Handle 404 errors"""
-    return render_template('404.html', title="Not Found"), 404
+    return render_template('errors/404.html'), 404
+
 
 @app.errorhandler(500)
 def server_error(e):
     """Handle 500 errors"""
-    return render_template('500.html', title="Server Error"), 500
+    return render_template('errors/500.html'), 500
 
-# Create needed directories
+
 def ensure_directories():
     """Ensure needed directories exist"""
+    os.makedirs('logs', exist_ok=True)
     os.makedirs('templates', exist_ok=True)
+    os.makedirs('static', exist_ok=True)
     os.makedirs('static/css', exist_ok=True)
     os.makedirs('static/js', exist_ok=True)
+    os.makedirs('static/img', exist_ok=True)
 
-# Initialize tables
-with app.app_context():
-    ensure_directories()
-    from models_sql import User, WebConfig, ApiToken
-    db.create_all()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    ensure_directories()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)

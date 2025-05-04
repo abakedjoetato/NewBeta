@@ -200,17 +200,50 @@ async def load_cogs():
             except Exception as e:
                 logger.error(f"Failed to load cog {cog_name}: {e}", exc_info=True)
 
-async def startup():
-    """Initialize the bot and database."""
-    try:
-        # Initialize the database connection
-        logger.info("Initializing database connection...")
-        db = await initialize_db()
-        logger.info("Database connection established")
+async def initialize_bot(force_sync=False):
+    """Initialize the bot and database.
+    
+    Args:
+        force_sync: Whether to force a sync of all commands
         
-        # Load all cogs
-        logger.info("Loading cogs...")
-        await load_cogs()
+    Returns:
+        The initialized bot object
+    """
+    # Initialize the database connection
+    logger.info("Initializing database connection...")
+    db = await initialize_db()
+    logger.info("Database connection established")
+    
+    # Load all cogs
+    logger.info("Loading cogs...")
+    await load_cogs()
+    
+    # Sync commands if requested
+    if force_sync:
+        logger.info("Syncing commands globally...")
+        try:
+            # Clear commands in development guild if specified
+            if HOME_GUILD_ID:
+                guild = discord.Object(id=int(HOME_GUILD_ID))
+                bot.tree.clear_commands(guild=guild)
+                await bot.tree.sync(guild=guild)
+                logger.info(f"Cleared and synced commands in development guild {HOME_GUILD_ID}")
+            
+            # Sync commands globally
+            bot.tree.clear_commands()
+            await bot.tree.sync()
+            logger.info("Commands synced globally")
+        except Exception as e:
+            logger.error(f"Error syncing commands: {e}", exc_info=True)
+    
+    return bot
+
+async def startup():
+    """Initialize the bot and database, then start the bot."""
+    try:
+        # Initialize the bot
+        logger.info("Initializing bot...")
+        await initialize_bot()
         
         # Start the bot
         logger.info("Starting bot...")
