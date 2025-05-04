@@ -35,6 +35,8 @@ class Player:
         self.faction_id = player_data.get("faction_id")
         # Added for player linking
         self.discord_id = player_data.get("discord_id")
+        # Added for hourly rivalry tracking
+        self.rivalries = player_data.get("rivalries", {})
     
     @classmethod
     async def get_by_id(cls, db, player_id: str, server_id: str) -> Optional['Player']:
@@ -320,11 +322,31 @@ class Player:
         # Calculate K/D ratio
         kdr = self.kills / max(self.deaths, 1)
         
-        # Get nemesis
-        nemesis = await self.get_nemesis()
+        # Check if we have updated rivalry data first (from hourly tracking)
+        nemesis = None
+        favorite_victim = None
         
-        # Get favorite victim
-        favorite_victim = await self.get_favorite_victim()
+        # Use hourly tracked rivalries if available
+        rivalry_last_updated = None
+        if self.rivalries and isinstance(self.rivalries, dict):
+            # Track when the rivalries were last updated
+            if "last_updated" in self.rivalries:
+                rivalry_last_updated = self.rivalries["last_updated"]
+                
+            # Get nemesis data
+            if "nemesis" in self.rivalries:
+                nemesis = self.rivalries["nemesis"]
+            
+            # Get prey data (favorite victim)
+            if "prey" in self.rivalries:
+                favorite_victim = self.rivalries["prey"]
+        
+        # Fall back to legacy methods if hourly data not available
+        if not nemesis:
+            nemesis = await self.get_nemesis()
+            
+        if not favorite_victim:    
+            favorite_victim = await self.get_favorite_victim()
         
         # Get favorite weapon
         favorite_weapon = await self.get_favorite_weapon()
@@ -357,7 +379,9 @@ class Player:
             "last_seen": self.last_seen,
             # Added for new features
             "faction_id": self.faction_id,
-            "discord_id": self.discord_id
+            "discord_id": self.discord_id,
+            # Rivalry tracking info
+            "rivalries_last_updated": rivalry_last_updated
         }
         
         return stats

@@ -227,6 +227,12 @@ async def setup_background_tasks(bot):
     interest_task = asyncio.create_task(pay_interest_task(bot))
     bot.background_tasks["interest_payment"] = interest_task
     
+    # Start hourly rivalry tracker task (all tiers)
+    from utils.rivalry_tracker import RivalryTracker
+    rivalry_task = asyncio.create_task(RivalryTracker.schedule_rivalry_updates(bot))
+    bot.background_tasks["rivalry_tracker"] = rivalry_task
+    logger.info("Starting hourly rivalry (Prey/Nemesis) tracker")
+    
     # Check if we have any guilds first - avoid errors if database is empty
     guild_count = await bot.db.guilds.count_documents({"servers": {"$exists": True, "$ne": []}})
     if guild_count == 0:
@@ -255,6 +261,7 @@ async def setup_background_tasks(bot):
                     # Import the background task functions
                     from cogs.killfeed import start_killfeed_monitor
                     from cogs.events import start_events_monitor
+                    from utils.rivalry_tracker import RivalryTracker
                     
                     # Get guild premium tier
                     premium_tier = guild_doc.get("premium_tier", 0)

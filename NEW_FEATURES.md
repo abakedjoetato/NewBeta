@@ -27,28 +27,29 @@ The Factions system allows players to organize into groups with customizable col
 - Faction territory control metrics
 - Automatic notifications for faction achievements
 
-## 2. Rivalries System
+## 2. Prey/Nemesis Rivalry System
 
-The Rivalries system tracks ongoing feuds between players with detailed statistics about their encounters.
+The Prey/Nemesis system automatically tracks natural rivalries between players by identifying each player's most frequent target (Prey) and most frequent killer (Nemesis).
 
-### Commands
+### Implementation
 
-- `/rivalry declare <player_name>` - Declare a rivalry with another player
-- `/rivalry list [server_id]` - List your active rivalries
-- `/rivalry info <player_name>` - View details about a specific rivalry
-- `/rivalry top [limit]` - View top rivalries by total kills
-- `/rivalry closest [limit]` - View closest rivalries by kill difference
-- `/rivalry recent [days] [limit]` - View recently active rivalries
-- `/rivalry end <player_name>` - End a declared rivalry
+Rather than using command-based rivalries, the system works automatically in the background:
+
+- An hourly background task updates each player's Prey and Nemesis relationships
+- A player's "Prey" is the player they've killed the most
+- A player's "Nemesis" is the player who has killed them the most
+- Minimum threshold of 3 kills required to establish a Prey or Nemesis relationship
+- Data is displayed directly in player stats embeds with 🎯 Prey and ☠️ Nemesis icons
+- Resource-efficient hourly updates instead of real-time processing
 
 ### Features
 
-- Track kill/death statistics between rivals
-- Calculate rivalry intensity scores
-- Generate rivalry leaderboards (top, closest, most active)
-- Send notifications when significant rivalry events occur
-- Rivalry-specific embeds with custom styling
-- Kill difference tracking with visual indicators
+- Automatic tracking without player input required
+- Natural rivalry detection based on actual gameplay
+- Server-specific rivalries for multi-server support
+- Hourly updates to balance accuracy and performance
+- Integrated directly into player statistics display
+- Fallback to legacy victim/killer tracking when hourly data isn't available yet
 
 ## 3. Player Linking System
 

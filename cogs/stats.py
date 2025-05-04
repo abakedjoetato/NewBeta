@@ -587,19 +587,25 @@ class Stats(commands.Cog):
             )
             matchups_embed.set_footer(text=EMBED_FOOTER)
 
-            # Add victim and nemesis info
+            # Add victim and nemesis info (using the new Prey/Nemesis terminology)
             favorite_victim = player_stats.get("favorite_victim")
             if favorite_victim:
+                prey_title = "🎯 Prey"
                 matchups_embed.add_field(
-                    name="Favorite Victim",
+                    name=prey_title,
                     value=f"{favorite_victim['player_name']} ({favorite_victim['kill_count']} kills)",
                     inline=True
                 )
+                
+                # Add a note if this data is from the hourly tracker
+                if player_stats.get("rivalries_last_updated"):
+                    matchups_embed.set_footer(text=f"Rivalries updated: {format_time_ago(player_stats.get('rivalries_last_updated'))}")
 
             nemesis = player_stats.get("nemesis")
             if nemesis:
+                nemesis_title = "☠️ Nemesis" 
                 matchups_embed.add_field(
-                    name="Nemesis",
+                    name=nemesis_title,
                     value=f"{nemesis['player_name']} ({nemesis['kill_count']} kills)",
                     inline=True
                 )
