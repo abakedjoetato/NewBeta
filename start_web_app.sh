@@ -1,12 +1,6 @@
 #!/bin/bash
+# Web Application Starter Script for Tower of Temptation
+# This script starts only the web application component, optimized for production environments
 
-# Load environment variables
-if [ -f .env ]; then
-    export $(cat .env | grep -v '#' | xargs)
-fi
-
-# Make sure the required directories exist
-mkdir -p templates static/css static/js
-
-# Run the Flask web application
-python main.py
+# Execute the main workflow script with the web-only flag
+./start_workflow.sh --web-only

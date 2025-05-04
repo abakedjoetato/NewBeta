@@ -1,2 +1,1 @@
-run = "bash start_discord_bot.sh"
-language = "python3"
+run = ["bash", "start_workflow.sh"]
