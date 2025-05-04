@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """
-Script to start the Flask web application for the Tower of Temptation PvP Statistics Bot
+Placeholder script for future web application functionality
+
+Note: Currently, this project is focused exclusively on Discord bot functionality 
+using MongoDB, not a web interface. This script is maintained for potential 
+future expansion but is not currently functional.
 """
 import os
 import sys
@@ -15,15 +19,10 @@ logging.basicConfig(
 logger = logging.getLogger("start_app")
 
 def main():
-    """Start the Flask web application"""
-    try:
-        # Import and run the Flask app
-        logger.info("Starting Flask web application on port 5000")
-        from app import app
-        app.run(host='0.0.0.0', port=5000, debug=True)
-    except Exception as e:
-        logger.error(f"Failed to start web application: {e}")
-        sys.exit(1)
+    """Placeholder for future web functionality"""
+    logger.info("Web application functionality is not currently implemented")
+    logger.info("This project is focused exclusively on Discord bot functionality")
+    logger.info("Please use start_discord_bot.sh to run the Discord bot")
 
 if __name__ == "__main__":
     main()

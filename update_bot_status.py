@@ -1,8 +1,8 @@
 """
-Script to update the bot's status in the database.
+Script to update the bot's status in the MongoDB database.
 
 This script is meant to be run periodically to provide status updates about the Discord bot
-for the web interface.
+and can be used for monitoring purposes.
 """
 import os
 import sys
@@ -11,8 +11,8 @@ import time
 from datetime import datetime
 import asyncio
 import discord
-from app import app, db
-from models.web import BotStatus, ErrorLog, StatsSnapshot
+import motor.motor_asyncio
+from pymongo import errors as mongo_errors
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +24,38 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# MongoDB connection
+async def get_database():
+    """Connect to MongoDB database"""
+    mongodb_uri = os.environ.get("MONGODB_URI")
+    if not mongodb_uri:
+        logger.error("MONGODB_URI environment variable not set")
+        return None
+        
+    try:
+        # Create client with configuration
+        client = motor.motor_asyncio.AsyncIOMotorClient(
+            mongodb_uri,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=45000,
+            maxPoolSize=100,
+            retryWrites=True
+        )
+        
+        # Verify connection
+        await client.admin.command('ping')
+        
+        # Get database
+        db_name = os.environ.get("MONGODB_DB", "tower_of_temptation")
+        db = client[db_name]
+        logger.info(f"Connected to MongoDB database: {db_name}")
+        
+        return db
+    except (mongo_errors.ConnectionFailure, mongo_errors.ServerSelectionTimeoutError) as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        return None
 
 async def get_bot_client():
     """
@@ -73,69 +105,70 @@ async def get_bot_client():
         return None, status_values
 
 async def update_status():
-    """Update the bot status in the database."""
+    """Update the bot status in the MongoDB database."""
     try:
-        with app.app_context():
-            logger.info('Updating bot status...')
+        # Connect to MongoDB
+        db = await get_database()
+        if not db:
+            logger.error("Could not connect to MongoDB database")
+            return False
             
-            # Connect to Discord to get real data
-            client, status_values = await get_bot_client()
+        logger.info('Updating bot status...')
+        
+        # Connect to Discord to get real data
+        client, status_values = await get_bot_client()
+        
+        # Create a new status entry
+        uptime = 0
+        if status_values['is_connected']:
+            uptime = int(time.time() - status_values['start_time'])
+        
+        # Get version from environment or use default
+        version = os.environ.get('BOT_VERSION', '0.1.0')
+        
+        status_data = {
+            'timestamp': datetime.utcnow(),
+            'is_online': status_values['is_connected'],
+            'uptime_seconds': uptime,
+            'guild_count': status_values['guild_count'],
+            'version': version
+        }
+        
+        # Add to database
+        await db.bot_status.insert_one(status_data)
+        logger.info(f'Status updated. Online: {status_data["is_online"]}, Guilds: {status_data["guild_count"]}')
+        
+        # If we have real data, update stats as well
+        if status_values['is_connected']:
+            # This would query MongoDB for current stats in a full implementation
+            # For now it's just a placeholder
+            stats_data = {
+                'timestamp': datetime.utcnow(),
+                'commands_used': await db.command_logs.count_documents({}),
+                'active_users': await db.active_users.count_documents({}),
+                'kills_tracked': await db.kills.count_documents({}),
+                'bounties_placed': await db.bounties.count_documents({'status': 'active'}),
+                'bounties_claimed': await db.bounties.count_documents({'status': 'claimed'})
+            }
             
-            # Create a new status entry
-            uptime = 0
-            if status_values['is_connected']:
-                uptime = int(time.time() - status_values['start_time'])
-            
-            # Get version from environment or use default
-            version = os.environ.get('BOT_VERSION', '0.1.0')
-            
-            status = BotStatus(
-                timestamp=datetime.utcnow(),
-                is_online=status_values['is_connected'],
-                uptime_seconds=uptime,
-                guild_count=status_values['guild_count'],
-                version=version
-            )
-            
-            # Add to database
-            db.session.add(status)
-            db.session.commit()
-            
-            logger.info(f'Status updated. Online: {status.is_online}, Guilds: {status.guild_count}')
-            
-            # If we have real data, update stats as well
-            if status_values['is_connected']:
-                # This is just a placeholder for now
-                # In a real implementation, we would query MongoDB for current stats
-                stats = StatsSnapshot(
-                    timestamp=datetime.utcnow(),
-                    commands_used=0,
-                    active_users=0,
-                    kills_tracked=0,
-                    bounties_placed=0,
-                    bounties_claimed=0
-                )
-                
-                db.session.add(stats)
-                db.session.commit()
-                logger.info('Stats snapshot created')
-            
-            return True
+            await db.stats_snapshots.insert_one(stats_data)
+            logger.info('Stats snapshot created')
+        
+        return True
     except Exception as e:
         logger.error(f'Error updating status: {e}')
         
         # Log the error in the database
         try:
-            with app.app_context():
-                error_log = ErrorLog(
-                    timestamp=datetime.utcnow(),
-                    level='ERROR',
-                    source='status_updater',
-                    message=str(e),
-                    traceback=str(sys.exc_info())
-                )
-                db.session.add(error_log)
-                db.session.commit()
+            if db:
+                error_log = {
+                    'timestamp': datetime.utcnow(),
+                    'level': 'ERROR',
+                    'source': 'status_updater',
+                    'message': str(e),
+                    'traceback': str(sys.exc_info())
+                }
+                await db.error_logs.insert_one(error_log)
         except Exception as db_error:
             logger.error(f'Error logging to database: {db_error}')
         

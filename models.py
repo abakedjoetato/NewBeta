@@ -1,165 +1,374 @@
 """
-Database models for the Tower of Temptation PvP Statistics Discord Bot
+MongoDB model definitions for the Tower of Temptation PvP Statistics Discord Bot
+
+This module defines the data structures used throughout the application.
+These are not SQLAlchemy models but rather document schemas for MongoDB.
 """
+import logging
 import os
-from datetime import datetime
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Union, TypeVar, ClassVar, Type
 
-class Base(DeclarativeBase):
-    pass
+# Define a type for document dictionaries
+Document = Dict[str, Any]
+T = TypeVar('T', bound='BaseModel')
 
-db = SQLAlchemy(model_class=Base)
+logger = logging.getLogger(__name__)
 
-class Guild(db.Model):
+class BaseModel:
+    """Base class for all MongoDB document models
+    
+    This provides common methods for all models.
+    """
+    # Collection name in MongoDB
+    collection_name: ClassVar[str] = ""
+    
+    @classmethod
+    def from_document(cls: Type[T], document: Dict[str, Any]) -> T:
+        """Create a model instance from a MongoDB document
+        
+        Args:
+            document: MongoDB document (dictionary)
+        
+        Returns:
+            Instance of the model
+        """
+        if document is None:
+            return None
+        
+        instance = cls()
+        for key, value in document.items():
+            setattr(instance, key, value)
+            
+        # Ensure _id is always available
+        if '_id' in document:
+            instance._id = document['_id']
+            
+        return instance
+    
+    def to_document(self) -> Dict[str, Any]:
+        """Convert model instance to MongoDB document
+        
+        Returns:
+            Dictionary suitable for MongoDB storage
+        """
+        document = {}
+        
+        # Get all attributes that don't start with underscore
+        for key, value in self.__dict__.items():
+            if not key.startswith('_') or key == '_id':
+                document[key] = value
+                
+        return document
+        
+    def __repr__(self) -> str:
+        """String representation of the model"""
+        name = self.__class__.__name__
+        attrs = []
+        
+        # Add name/id if available
+        if hasattr(self, 'name'):
+            attrs.append(f"name='{self.name}'")
+        if hasattr(self, '_id'):
+            attrs.append(f"id={self._id}")
+            
+        return f"<{name} {' '.join(attrs)}>"
+
+
+class Guild(BaseModel):
     """Discord Guild (Server) information"""
-    id = db.Column(db.Integer, primary_key=True)
-    guild_id = db.Column(db.String(20), unique=True, nullable=False, index=True)
-    name = db.Column(db.String(100), nullable=False)
-    premium_tier = db.Column(db.Integer, default=0)
-    join_date = db.Column(db.DateTime, default=datetime.utcnow)
-    last_activity = db.Column(db.DateTime, default=datetime.utcnow)
+    collection_name = "guilds"
     
-    # Relationships
-    servers = db.relationship('GameServer', backref='guild', lazy=True)
-    
-    def __repr__(self):
-        return f"<Guild {self.name}>"
+    def __init__(
+        self,
+        guild_id: str = None,
+        name: str = None,
+        premium_tier: int = 0,
+        join_date: datetime = None,
+        last_activity: datetime = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.guild_id = guild_id
+        self.name = name
+        self.premium_tier = premium_tier
+        self.join_date = join_date or datetime.utcnow()
+        self.last_activity = last_activity or datetime.utcnow()
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    @classmethod
+    async def get_by_guild_id(cls, db, guild_id: str) -> 'Guild':
+        """Get a guild by Discord guild_id
+        
+        Args:
+            db: Database connection
+            guild_id: Discord guild ID
+            
+        Returns:
+            Guild object or None if not found
+        """
+        document = await db.guilds.find_one({"guild_id": guild_id})
+        return cls.from_document(document)
 
-class GameServer(db.Model):
+
+class GameServer(BaseModel):
     """Game server configuration"""
-    id = db.Column(db.Integer, primary_key=True)
-    guild_id = db.Column(db.Integer, db.ForeignKey('guild.id'), nullable=False)
-    server_id = db.Column(db.String(50), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    sftp_host = db.Column(db.String(255), nullable=True)
-    sftp_port = db.Column(db.Integer, nullable=True)
-    sftp_username = db.Column(db.String(100), nullable=True)
-    sftp_password = db.Column(db.String(100), nullable=True)
-    sftp_directory = db.Column(db.String(255), nullable=True)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_sync = db.Column(db.DateTime, nullable=True)
+    collection_name = "game_servers"
     
-    # Unique constraint
-    __table_args__ = (
-        db.UniqueConstraint('guild_id', 'server_id', name='uix_guild_server'),
-    )
-    
-    # Relationships
-    players = db.relationship('Player', backref='server', lazy=True)
-    bounties = db.relationship('Bounty', backref='server', lazy=True)
-    
-    def __repr__(self):
-        return f"<GameServer {self.name}>"
+    def __init__(
+        self,
+        guild_id: str = None,
+        server_id: str = None,
+        name: str = None,
+        sftp_host: str = None,
+        sftp_port: int = 22,
+        sftp_username: str = None,
+        sftp_password: str = None,
+        sftp_directory: str = None,
+        active: bool = True,
+        created_at: datetime = None,
+        last_sync: datetime = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.guild_id = guild_id
+        self.server_id = server_id
+        self.name = name
+        self.sftp_host = sftp_host
+        self.sftp_port = sftp_port
+        self.sftp_username = sftp_username
+        self.sftp_password = sftp_password
+        self.sftp_directory = sftp_directory
+        self.active = active
+        self.created_at = created_at or datetime.utcnow()
+        self.last_sync = last_sync
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-class Player(db.Model):
+
+class Player(BaseModel):
     """Player information from game servers"""
-    id = db.Column(db.Integer, primary_key=True)
-    server_id = db.Column(db.Integer, db.ForeignKey('game_server.id'), nullable=False)
-    player_id = db.Column(db.String(50), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    kills = db.Column(db.Integer, default=0)
-    deaths = db.Column(db.Integer, default=0)
-    kd_ratio = db.Column(db.Float, default=0.0)
-    first_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    collection_name = "players"
     
-    # Unique constraint
-    __table_args__ = (
-        db.UniqueConstraint('server_id', 'player_id', name='uix_server_player'),
-    )
-    
-    # Relationships
-    links = db.relationship('PlayerLink', backref='player', lazy=True)
-    target_bounties = db.relationship('Bounty', foreign_keys='Bounty.target_id', backref='target', lazy=True)
-    
-    def __repr__(self):
-        return f"<Player {self.name}>"
+    def __init__(
+        self,
+        server_id: str = None,
+        guild_id: str = None,
+        player_id: str = None,
+        name: str = None,
+        kills: int = 0,
+        deaths: int = 0,
+        kd_ratio: float = 0.0,
+        first_seen: datetime = None,
+        last_seen: datetime = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.server_id = server_id
+        self.guild_id = guild_id
+        self.player_id = player_id
+        self.name = name
+        self.kills = kills
+        self.deaths = deaths
+        self.kd_ratio = kd_ratio
+        self.first_seen = first_seen or datetime.utcnow()
+        self.last_seen = last_seen or datetime.utcnow()
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            
+    @classmethod
+    async def get_by_player_id(cls, db, server_id: str, player_id: str) -> 'Player':
+        """Get a player by server_id and player_id
+        
+        Args:
+            db: Database connection
+            server_id: Game server ID
+            player_id: Player ID in the game
+            
+        Returns:
+            Player object or None if not found
+        """
+        document = await db.players.find_one({"server_id": server_id, "player_id": player_id})
+        return cls.from_document(document)
 
-class PlayerLink(db.Model):
+
+class PlayerLink(BaseModel):
     """Links between Discord users and in-game players"""
-    id = db.Column(db.Integer, primary_key=True)
-    discord_id = db.Column(db.String(20), nullable=False)
-    player_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
-    server_id = db.Column(db.Integer, db.ForeignKey('game_server.id'), nullable=False)
-    verified = db.Column(db.Boolean, default=False)
-    linked_at = db.Column(db.DateTime, default=datetime.utcnow)
+    collection_name = "player_links"
     
-    # Unique constraint
-    __table_args__ = (
-        db.UniqueConstraint('discord_id', 'player_id', 'server_id', name='uix_discord_player_server'),
-    )
-    
-    def __repr__(self):
-        return f"<PlayerLink Discord:{self.discord_id} -> Player:{self.player_id}>"
+    def __init__(
+        self,
+        discord_id: str = None,
+        player_id: str = None,
+        server_id: str = None,
+        guild_id: str = None,
+        verified: bool = False,
+        linked_at: datetime = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.discord_id = discord_id
+        self.player_id = player_id
+        self.server_id = server_id
+        self.guild_id = guild_id
+        self.verified = verified
+        self.linked_at = linked_at or datetime.utcnow()
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-class Bounty(db.Model):
+
+class Bounty(BaseModel):
     """Bounty information"""
-    id = db.Column(db.Integer, primary_key=True)
-    guild_id = db.Column(db.Integer, db.ForeignKey('guild.id'), nullable=False)
-    server_id = db.Column(db.Integer, db.ForeignKey('game_server.id'), nullable=False)
-    target_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
-    placed_by = db.Column(db.String(20), nullable=False)  # Discord ID
-    placed_by_name = db.Column(db.String(100), nullable=False)
-    reason = db.Column(db.String(255), nullable=True)
-    reward = db.Column(db.Integer, nullable=False)
-    status = db.Column(db.String(20), default='active', nullable=False)
-    source = db.Column(db.String(20), default='player', nullable=False)  # player, auto
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    expires_at = db.Column(db.DateTime, nullable=False)
-    claimed_by = db.Column(db.String(20), nullable=True)  # Discord ID of claimer
-    claimed_by_name = db.Column(db.String(100), nullable=True)
-    claimed_at = db.Column(db.DateTime, nullable=True)
+    collection_name = "bounties"
     
-    def __repr__(self):
-        return f"<Bounty {self.id}: {self.status}>"
+    def __init__(
+        self,
+        guild_id: str = None,
+        server_id: str = None,
+        target_id: str = None,
+        target_name: str = None,
+        placed_by: str = None,  # Discord ID
+        placed_by_name: str = None,
+        reason: str = None,
+        reward: int = 0,
+        status: str = "active",
+        source: str = "player",  # player, auto
+        created_at: datetime = None,
+        expires_at: datetime = None,
+        claimed_by: str = None,  # Discord ID of claimer
+        claimed_by_name: str = None,
+        claimed_at: datetime = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.guild_id = guild_id
+        self.server_id = server_id
+        self.target_id = target_id
+        self.target_name = target_name
+        self.placed_by = placed_by
+        self.placed_by_name = placed_by_name
+        self.reason = reason
+        self.reward = reward
+        self.status = status
+        self.source = source
+        self.created_at = created_at or datetime.utcnow()
+        
+        # Default expiration is 1 hour from creation
+        if expires_at is None and created_at is not None:
+            self.expires_at = created_at + timedelta(hours=1)
+        elif expires_at is None:
+            self.expires_at = datetime.utcnow() + timedelta(hours=1)
+        else:
+            self.expires_at = expires_at
+            
+        self.claimed_by = claimed_by
+        self.claimed_by_name = claimed_by_name
+        self.claimed_at = claimed_at
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-class Kill(db.Model):
+
+class Kill(BaseModel):
     """Kill events tracked from game logs"""
-    id = db.Column(db.Integer, primary_key=True)
-    guild_id = db.Column(db.Integer, db.ForeignKey('guild.id'), nullable=False)
-    server_id = db.Column(db.Integer, db.ForeignKey('game_server.id'), nullable=False)
-    kill_id = db.Column(db.String(100), nullable=False, unique=True)
-    timestamp = db.Column(db.DateTime, nullable=False)
-    killer_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
-    killer_name = db.Column(db.String(100), nullable=False)
-    victim_id = db.Column(db.Integer, db.ForeignKey('player.id'), nullable=False)
-    victim_name = db.Column(db.String(100), nullable=False)
-    weapon = db.Column(db.String(100), nullable=True)
-    distance = db.Column(db.Float, nullable=True)
-    console = db.Column(db.String(10), nullable=True)  # XSX, PS5, etc.
+    collection_name = "kills"
     
-    # Relationships
-    killer = db.relationship('Player', foreign_keys=[killer_id], backref='kills')
-    victim = db.relationship('Player', foreign_keys=[victim_id], backref='deaths_by')
-    
-    def __repr__(self):
-        return f"<Kill {self.killer_name} -> {self.victim_name}>"
+    def __init__(
+        self,
+        guild_id: str = None,
+        server_id: str = None,
+        kill_id: str = None,
+        timestamp: datetime = None,
+        killer_id: str = None,
+        killer_name: str = None,
+        victim_id: str = None,
+        victim_name: str = None,
+        weapon: str = None,
+        distance: float = None,
+        console: str = None,  # XSX, PS5, etc.
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.guild_id = guild_id
+        self.server_id = server_id
+        self.kill_id = kill_id
+        self.timestamp = timestamp or datetime.utcnow()
+        self.killer_id = killer_id
+        self.killer_name = killer_name
+        self.victim_id = victim_id
+        self.victim_name = victim_name
+        self.weapon = weapon
+        self.distance = distance
+        self.console = console
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-class BotStatus(db.Model):
+
+class BotStatus(BaseModel):
     """Tracks the Discord bot's status"""
-    id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    is_online = db.Column(db.Boolean, default=False, nullable=False)
-    uptime_seconds = db.Column(db.Integer, default=0, nullable=False)
-    guild_count = db.Column(db.Integer, default=0, nullable=False)
-    command_count = db.Column(db.Integer, default=0, nullable=False)
-    error_count = db.Column(db.Integer, default=0, nullable=False)
+    collection_name = "bot_status"
     
-    def __repr__(self):
-        return f"<BotStatus {self.timestamp}: Online={self.is_online}>"
+    def __init__(
+        self,
+        timestamp: datetime = None,
+        is_online: bool = False,
+        uptime_seconds: int = 0,
+        guild_count: int = 0,
+        command_count: int = 0,
+        error_count: int = 0,
+        version: str = "0.1.0",
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.timestamp = timestamp or datetime.utcnow()
+        self.is_online = is_online
+        self.uptime_seconds = uptime_seconds
+        self.guild_count = guild_count
+        self.command_count = command_count
+        self.error_count = error_count
+        self.version = version
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-class EconomyTransaction(db.Model):
+
+class EconomyTransaction(BaseModel):
     """Tracks in-game currency transactions"""
-    id = db.Column(db.Integer, primary_key=True)
-    discord_id = db.Column(db.String(20), nullable=False)
-    server_id = db.Column(db.Integer, db.ForeignKey('game_server.id'), nullable=False)
-    amount = db.Column(db.Integer, nullable=False)
-    type = db.Column(db.String(50), nullable=False)  # bounty_placed, bounty_claimed, etc.
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    description = db.Column(db.String(255), nullable=True)
+    collection_name = "economy"
     
-    def __repr__(self):
-        return f"<Transaction {self.discord_id}: {self.amount} ({self.type})>"
+    def __init__(
+        self,
+        discord_id: str = None,
+        guild_id: str = None,
+        server_id: str = None,
+        amount: int = 0,
+        type: str = None,  # bounty_placed, bounty_claimed, etc.
+        timestamp: datetime = None,
+        description: str = None,
+        **kwargs
+    ):
+        self._id = None  # MongoDB ObjectId
+        self.discord_id = discord_id
+        self.guild_id = guild_id
+        self.server_id = server_id
+        self.amount = amount
+        self.type = type
+        self.timestamp = timestamp or datetime.utcnow()
+        self.description = description
+        
+        # Add any additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)

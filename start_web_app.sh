@@ -1,25 +1,12 @@
 #!/bin/bash
 
-# Script to start the Flask web application for Tower of Temptation PvP Statistics Bot
+# ========================================================
+# NOTE: The web application component is not currently part of this project.
+# This project focuses exclusively on Discord bot functionality using MongoDB.
+# This script is kept for future reference.
+# ========================================================
 
-echo "Starting Tower of Temptation PvP Statistics Bot Web App..."
-
-# Ensure required environment variables are set
-if [ -z "$DATABASE_URL" ]; then
-    echo "Error: DATABASE_URL environment variable is not set."
-    exit 1
-fi
-
-# Activate virtual environment if it exists
-if [ -d "venv" ]; then
-    echo "Activating virtual environment..."
-    source venv/bin/activate
-fi
-
-# Make sure Flask and dependencies are installed
-echo "Checking dependencies..."
-pip install -r requirements.txt
-
-# Run the application
-echo "Starting Flask application on port 5000..."
-gunicorn --bind 0.0.0.0:5000 main:app
+echo "The web application functionality is not currently implemented."
+echo "This project is focused exclusively on Discord bot functionality."
+echo "Please use start_discord_bot.sh to run the Discord bot."
+exit 0
