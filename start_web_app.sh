@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# ========================================================
-# NOTE: The web application component is not currently part of this project.
-# This project focuses exclusively on Discord bot functionality using MongoDB.
-# This script is kept for future reference.
-# ========================================================
+# Load environment variables
+if [ -f .env ]; then
+    export $(cat .env | grep -v '#' | xargs)
+fi
 
-echo "The web application functionality is not currently implemented."
-echo "This project is focused exclusively on Discord bot functionality."
-echo "Please use start_discord_bot.sh to run the Discord bot."
-exit 0
+# Make sure the required directories exist
+mkdir -p templates static/css static/js
+
+# Run the Flask web application
+python main.py

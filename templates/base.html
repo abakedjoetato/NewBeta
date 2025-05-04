@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Tower of Temptation PvP Stats{% endblock %}</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('home') }}">
+                <i class="fas fa-tower-observation me-2"></i>Tower of Temptation
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('home') %}active{% endif %}" href="{{ url_for('home') }}">
+                            <i class="fas fa-home me-1"></i>Home
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('stats') %}active{% endif %}" href="{{ url_for('stats') }}">
+                            <i class="fas fa-chart-line me-1"></i>Bot Stats
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('leaderboards') %}active{% endif %}" href="{{ url_for('leaderboards') }}">
+                            <i class="fas fa-trophy me-1"></i>Leaderboards
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('rivalries') %}active{% endif %}" href="{{ url_for('rivalries') }}">
+                            <i class="fas fa-swords me-1"></i>Rivalries
+                        </a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    {% if session.get('is_authenticated') %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('admin') %}active{% endif %}" href="{{ url_for('admin') }}">
+                            <i class="fas fa-cog me-1"></i>Admin
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">
+                            <i class="fas fa-sign-out-alt me-1"></i>Logout
+                        </a>
+                    </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path == url_for('login') %}active{% endif %}" href="{{ url_for('login') }}">
+                            <i class="fas fa-sign-in-alt me-1"></i>Login
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Flash Messages -->
+    <div class="container mt-3">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert alert-{{ category }} alert-dismissible fade show">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% endfor %}
+        {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Main Content -->
+    <main class="container py-4">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-dark text-white py-4 mt-5">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>Tower of Temptation PvP Statistics</h5>
+                    <p>Track your competitive gaming performance with advanced statistics and analytics.</p>
+                </div>
+                <div class="col-md-3">
+                    <h5>Links</h5>
+                    <ul class="list-unstyled">
+                        <li><a href="{{ url_for('home') }}" class="text-white">Home</a></li>
+                        <li><a href="{{ url_for('stats') }}" class="text-white">Bot Stats</a></li>
+                        <li><a href="{{ url_for('leaderboards') }}" class="text-white">Leaderboards</a></li>
+                        <li><a href="{{ url_for('rivalries') }}" class="text-white">Rivalries</a></li>
+                    </ul>
+                </div>
+                <div class="col-md-3">
+                    <h5>Connect</h5>
+                    <ul class="list-unstyled">
+                        <li><a href="https://discord.gg/toweroftemptation" class="text-white"><i class="fab fa-discord me-2"></i>Join Discord</a></li>
+                        <li><a href="https://github.com/toweroftemptation" class="text-white"><i class="fab fa-github me-2"></i>GitHub</a></li>
+                    </ul>
+                </div>
+            </div>
+            <hr>
+            <div class="text-center">
+                <p class="mb-0">&copy; 2025 Tower of Temptation. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Bootstrap & jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

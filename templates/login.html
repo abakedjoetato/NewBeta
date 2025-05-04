@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-5">
+        <div class="card o-hidden border-0 shadow-lg my-5">
+            <div class="card-body p-0">
+                <div class="p-5">
+                    <div class="text-center mb-4">
+                        <h1 class="h4 text-gray-900">Welcome Back!</h1>
+                        <p class="mb-4">Enter your credentials to access the admin dashboard</p>
+                    </div>
+                    
+                    <form class="user" method="POST">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" name="username" placeholder="Enter username" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" name="password" placeholder="Password" required>
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="remember" name="remember">
+                            <label class="form-check-label" for="remember">Remember Me</label>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary btn-block w-100">
+                            Login
+                        </button>
+                    </form>
+                    
+                    <hr>
+                    
+                    <div class="text-center">
+                        <a class="small" href="#">Forgot Password?</a>
+                    </div>
+                    <div class="text-center">
+                        <a class="small" href="{{ url_for('home') }}">Return to Homepage</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

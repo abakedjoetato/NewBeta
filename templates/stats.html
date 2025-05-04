@@ -1,0 +1,413 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stats-card {
+        transition: transform 0.3s;
+    }
+    .stats-card:hover {
+        transform: translateY(-5px);
+    }
+    .chart-container {
+        height: 300px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1><i class="fas fa-chart-line me-2"></i>Bot Statistics</h1>
+    <div class="d-flex">
+        <div class="btn-group me-2" role="group">
+            <button type="button" class="btn btn-outline-primary active" id="daily-btn">Day</button>
+            <button type="button" class="btn btn-outline-primary" id="weekly-btn">Week</button>
+            <button type="button" class="btn btn-outline-primary" id="monthly-btn">Month</button>
+        </div>
+        <button class="btn btn-success" id="refresh-btn">
+            <i class="fas fa-sync-alt me-1"></i>Refresh
+        </button>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card border-left-primary shadow h-100 py-2 stats-card">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Servers</div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800" id="total-servers">--</div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-server fa-2x text-gray-300"></i>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs text-success">
+                    <span id="servers-change">+0</span> since yesterday
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card border-left-success shadow h-100 py-2 stats-card">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Players</div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800" id="total-players">--</div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-users fa-2x text-gray-300"></i>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs text-success">
+                    <span id="players-change">+0</span> since yesterday
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card border-left-info shadow h-100 py-2 stats-card">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Commands Used</div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800" id="total-commands">--</div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-terminal fa-2x text-gray-300"></i>
+                    </div>
+                </div>
+                <div class="progress progress-sm mt-2">
+                    <div class="progress-bar bg-info" role="progressbar" style="width: 50%" id="command-progress"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card border-left-warning shadow h-100 py-2 stats-card">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Uptime</div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800" id="uptime">--</div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-clock fa-2x text-gray-300"></i>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs">
+                    <span class="text-success" id="last-restart">Last restart: Never</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xl-8 col-lg-7">
+        <div class="card shadow mb-4">
+            <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+                <h6 class="m-0 font-weight-bold text-primary">Activity Overview</h6>
+                <div class="dropdown no-arrow">
+                    <a class="dropdown-toggle" href="#" role="button" id="dropdownMenuLink" data-bs-toggle="dropdown">
+                        <i class="fas fa-ellipsis-v fa-sm fa-fw text-gray-400"></i>
+                    </a>
+                    <div class="dropdown-menu dropdown-menu-right shadow" aria-labelledby="dropdownMenuLink">
+                        <div class="dropdown-header">View Options:</div>
+                        <a class="dropdown-item" href="#">Total Activity</a>
+                        <a class="dropdown-item" href="#">Commands Only</a>
+                        <a class="dropdown-item" href="#">Kills Only</a>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="activityChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-4 col-lg-5">
+        <div class="card shadow mb-4">
+            <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+                <h6 class="m-0 font-weight-bold text-primary">Command Usage</h6>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="commandsChart"></canvas>
+                </div>
+                <div class="mt-4 text-center small">
+                    <span class="me-2">
+                        <i class="fas fa-circle text-primary"></i> Stats
+                    </span>
+                    <span class="me-2">
+                        <i class="fas fa-circle text-success"></i> Bounties
+                    </span>
+                    <span class="me-2">
+                        <i class="fas fa-circle text-info"></i> Leaderboard
+                    </span>
+                    <span class="me-2">
+                        <i class="fas fa-circle text-warning"></i> Setup
+                    </span>
+                    <span class="me-2">
+                        <i class="fas fa-circle text-danger"></i> Other
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow mb-4">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Top Servers by Activity</h6>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered" id="top-servers-table" width="100%" cellspacing="0">
+                        <thead>
+                            <tr>
+                                <th>Server</th>
+                                <th>Players</th>
+                                <th>Kills</th>
+                                <th>Activity</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="4" class="text-center">Loading server data...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6 mb-4">
+        <div class="card shadow mb-4">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Recent Events</h6>
+            </div>
+            <div class="card-body">
+                <div id="event-log">
+                    <div class="d-flex align-items-center text-center">
+                        <div class="spinner-border text-primary" role="status"></div>
+                        <span class="ms-2">Loading events...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    $(document).ready(function() {
+        // Sample data for charts
+        const activityData = {
+            labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'],
+            datasets: [{
+                label: 'Commands',
+                borderColor: '#4e73df',
+                backgroundColor: 'rgba(78, 115, 223, 0.05)',
+                borderWidth: 2,
+                pointRadius: 3,
+                data: [0, 10000, 5000, 15000, 10000, 20000, 15000],
+                fill: true
+            }, {
+                label: 'Kills Tracked',
+                borderColor: '#e74a3b',
+                backgroundColor: 'rgba(231, 74, 59, 0.05)',
+                borderWidth: 2,
+                pointRadius: 3,
+                data: [0, 20000, 15000, 25000, 20000, 30000, 25000],
+                fill: true
+            }]
+        };
+        
+        const commandData = {
+            labels: ['Stats', 'Bounties', 'Leaderboard', 'Setup', 'Other'],
+            datasets: [{
+                backgroundColor: ['#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b'],
+                hoverBackgroundColor: ['#2e59d9', '#17a673', '#2c9faf', '#dda20a', '#be2617'],
+                data: [35, 25, 20, 10, 10]
+            }]
+        };
+        
+        // Initialize Charts
+        const activityChart = new Chart(document.getElementById('activityChart'), {
+            type: 'line',
+            data: activityData,
+            options: {
+                maintainAspectRatio: false,
+                layout: {
+                    padding: {
+                        left: 10,
+                        right: 25,
+                        top: 25,
+                        bottom: 0
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            display: false,
+                            drawBorder: false
+                        }
+                    },
+                    y: {
+                        ticks: {
+                            maxTicksLimit: 5,
+                            padding: 10
+                        },
+                        grid: {
+                            color: "rgb(234, 236, 244)",
+                            drawBorder: false,
+                            borderDash: [2],
+                            zeroLineBorderDash: [2]
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true
+                    },
+                    tooltip: {
+                        backgroundColor: "rgb(255,255,255)",
+                        bodyColor: "#858796",
+                        titleMarginBottom: 10,
+                        titleColor: '#6e707e',
+                        titleFontSize: 14,
+                        borderColor: '#dddfeb',
+                        borderWidth: 1,
+                        xPadding: 15,
+                        yPadding: 15,
+                        displayColors: false,
+                        intersect: false,
+                        mode: 'index',
+                        caretPadding: 10
+                    }
+                }
+            }
+        });
+        
+        const commandsChart = new Chart(document.getElementById('commandsChart'), {
+            type: 'doughnut',
+            data: commandData,
+            options: {
+                maintainAspectRatio: false,
+                cutout: '70%',
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        backgroundColor: "rgb(255,255,255)",
+                        bodyColor: "#858796",
+                        borderColor: '#dddfeb',
+                        borderWidth: 1,
+                        xPadding: 15,
+                        yPadding: 15,
+                        displayColors: false,
+                        caretPadding: 10
+                    }
+                }
+            }
+        });
+        
+        // Fetch top servers data
+        const serverData = [
+            { name: 'Tower of Temptation Main', players: 1245, kills: 45678, activity: 98 },
+            { name: 'Gaming Legends', players: 876, kills: 23456, activity: 85 },
+            { name: 'PvP Champions', players: 654, kills: 12345, activity: 72 },
+            { name: 'Battle Royale Community', players: 432, kills: 7890, activity: 65 },
+            { name: 'Gaming Central', players: 321, kills: 5678, activity: 54 }
+        ];
+        
+        let serverTableHTML = '';
+        serverData.forEach(server => {
+            serverTableHTML += `
+                <tr>
+                    <td>${server.name}</td>
+                    <td>${server.players}</td>
+                    <td>${server.kills.toLocaleString()}</td>
+                    <td>
+                        <div class="progress progress-sm">
+                            <div class="progress-bar bg-success" role="progressbar" style="width: ${server.activity}%"></div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+        $('#top-servers-table tbody').html(serverTableHTML);
+        
+        // Generate event log
+        const events = [
+            { type: 'kill', message: '<strong>Player1</strong> killed <strong>Player2</strong> with AR-15 (125m)', time: '2 minutes ago', icon: 'fas fa-skull-crossbones text-danger' },
+            { type: 'bounty', message: '<strong>Player3</strong> placed a 500 coin bounty on <strong>Player1</strong>', time: '15 minutes ago', icon: 'fas fa-money-bill text-success' },
+            { type: 'server', message: '<strong>New Server</strong> added the bot and configured SFTP settings', time: '1 hour ago', icon: 'fas fa-server text-primary' },
+            { type: 'command', message: '<strong>Player4</strong> viewed the leaderboard for <strong>HeadShots</strong>', time: '2 hours ago', icon: 'fas fa-terminal text-info' },
+            { type: 'error', message: 'Failed to connect to SFTP for <strong>PvP Server</strong>', time: '3 hours ago', icon: 'fas fa-exclamation-triangle text-warning' }
+        ];
+        
+        let eventsHTML = '';
+        events.forEach((event, index) => {
+            eventsHTML += `
+                <div class="d-flex ${index < events.length - 1 ? 'border-bottom mb-3 pb-3' : ''}">
+                    <div class="me-3">
+                        <div class="icon-circle bg-light p-2">
+                            <i class="${event.icon}"></i>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="small text-gray-500">${event.time}</div>
+                        <span class="font-weight-bold">${event.message}</span>
+                    </div>
+                </div>
+            `;
+        });
+        $('#event-log').html(eventsHTML);
+        
+        // Update general statistics
+        $('#total-servers').text('127');
+        $('#servers-change').text('+3');
+        $('#total-players').text('24,385');
+        $('#players-change').text('+127');
+        $('#total-commands').text('158,742');
+        $('#command-progress').css('width', '78%');
+        $('#uptime').text('27 days 4 hours');
+        $('#last-restart').text('Last restart: April 7, 2025');
+        
+        // Handle time period buttons
+        $('#daily-btn, #weekly-btn, #monthly-btn').click(function() {
+            $(this).addClass('active').siblings().removeClass('active');
+            // Would update chart data based on selected period
+        });
+        
+        // Handle refresh button
+        $('#refresh-btn').click(function() {
+            const $this = $(this);
+            $this.html('<i class="fas fa-spinner fa-spin me-1"></i>Refreshing');
+            $this.prop('disabled', true);
+            
+            // Simulate refresh delay
+            setTimeout(function() {
+                $this.html('<i class="fas fa-sync-alt me-1"></i>Refresh');
+                $this.prop('disabled', false);
+            }, 1500);
+        });
+    });
+</script>
+{% endblock %}

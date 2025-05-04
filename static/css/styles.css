@@ -1,0 +1,251 @@
+/* Custom CSS for Tower of Temptation PvP Statistics Bot */
+
+/* General Styles */
+body {
+    background-color: #f8f9fc;
+    font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Card Styles */
+.card {
+    box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
+    border: none;
+    border-radius: 0.35rem;
+}
+
+.card .card-header {
+    background-color: #f8f9fc;
+    border-bottom: 1px solid #e3e6f0;
+}
+
+.border-left-primary {
+    border-left: 0.25rem solid #4e73df !important;
+}
+
+.border-left-success {
+    border-left: 0.25rem solid #1cc88a !important;
+}
+
+.border-left-info {
+    border-left: 0.25rem solid #36b9cc !important;
+}
+
+.border-left-warning {
+    border-left: 0.25rem solid #f6c23e !important;
+}
+
+.border-left-danger {
+    border-left: 0.25rem solid #e74a3b !important;
+}
+
+/* Text Colors */
+.text-gray-100 {
+    color: #f8f9fc !important;
+}
+
+.text-gray-200 {
+    color: #eaecf4 !important;
+}
+
+.text-gray-300 {
+    color: #dddfeb !important;
+}
+
+.text-gray-400 {
+    color: #d1d3e2 !important;
+}
+
+.text-gray-500 {
+    color: #b7b9cc !important;
+}
+
+.text-gray-600 {
+    color: #858796 !important;
+}
+
+.text-gray-700 {
+    color: #6e707e !important;
+}
+
+.text-gray-800 {
+    color: #5a5c69 !important;
+}
+
+.text-gray-900 {
+    color: #3a3b45 !important;
+}
+
+/* Background Colors */
+.bg-gradient-primary {
+    background-color: #4e73df;
+    background-image: linear-gradient(180deg, #4e73df 10%, #224abe 100%);
+    background-size: cover;
+}
+
+.bg-gradient-success {
+    background-color: #1cc88a;
+    background-image: linear-gradient(180deg, #1cc88a 10%, #13855c 100%);
+    background-size: cover;
+}
+
+.bg-gradient-info {
+    background-color: #36b9cc;
+    background-image: linear-gradient(180deg, #36b9cc 10%, #258391 100%);
+    background-size: cover;
+}
+
+.bg-gradient-warning {
+    background-color: #f6c23e;
+    background-image: linear-gradient(180deg, #f6c23e 10%, #dda20a 100%);
+    background-size: cover;
+}
+
+.bg-gradient-danger {
+    background-color: #e74a3b;
+    background-image: linear-gradient(180deg, #e74a3b 10%, #be2617 100%);
+    background-size: cover;
+}
+
+/* Icon Styles */
+.icon-circle {
+    height: 2.5rem;
+    width: 2.5rem;
+    border-radius: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Buttons */
+.btn-circle {
+    border-radius: 100%;
+    height: 2.5rem;
+    width: 2.5rem;
+    font-size: 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-circle.btn-sm {
+    height: 1.8rem;
+    width: 1.8rem;
+    font-size: 0.75rem;
+}
+
+.btn-circle.btn-lg {
+    height: 3.5rem;
+    width: 3.5rem;
+    font-size: 1.35rem;
+}
+
+/* Progress Bar */
+.progress {
+    height: 0.5rem;
+}
+
+.progress-sm {
+    height: 0.25rem;
+}
+
+/* Leaderboard Specific */
+.leaderboard-card {
+    border-left: 4px solid #4e73df;
+    transition: transform 0.2s;
+}
+
+.leaderboard-card:hover {
+    transform: translateY(-5px);
+}
+
+.rank-badge {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+}
+
+.rank-1 {
+    background-color: gold;
+    color: #333;
+}
+
+.rank-2 {
+    background-color: silver;
+    color: #333;
+}
+
+.rank-3 {
+    background-color: #cd7f32; /* bronze */
+    color: white;
+}
+
+/* Rivalry Cards */
+.rivalry-card {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    transition: all 0.3s;
+}
+
+.rivalry-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.175);
+}
+
+.rivalry-header {
+    padding: 1.25rem;
+    background: linear-gradient(45deg, #4e73df, #224abe);
+    color: white;
+}
+
+.player-avatar {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background-color: #eaecf4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #5a5c69;
+    margin: 0 auto 0.5rem;
+}
+
+.vs-badge {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-color: #e74a3b;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    margin: 0 auto;
+}
+
+/* Login Page */
+.login-card {
+    max-width: 25rem;
+    margin: 0 auto;
+}
+
+.login-brand {
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .chart-container {
+        height: 200px;
+    }
+    
+    .card-deck {
+        display: block;
+    }
+}

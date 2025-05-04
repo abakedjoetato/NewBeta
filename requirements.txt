@@ -68,3 +68,8 @@ paramiko
 psutil
 pymongo
 python-dotenv
+aiohttp
+bson
+motor
+pydantic
+pymongo

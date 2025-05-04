@@ -907,8 +907,10 @@ async def update_player_stats(bot, server_id, kill_event):
         if guild_data:
             guild = Guild(bot.db, guild_data)
             has_economy = guild.check_feature_access("economy")
+            has_rivalries = guild.check_feature_access("rivalries")
         else:
             has_economy = False
+            has_rivalries = False
 
         # Handle suicide case
         if kill_event["is_suicide"]:
@@ -990,6 +992,22 @@ async def update_player_stats(bot, server_id, kill_event):
                     killer_id=killer.id,
                     killer_name=killer.name
                 )
+                
+            # Update rivalry data (Prey/Nemesis tracking)
+            if has_rivalries:
+                try:
+                    from utils.rivalry_tracker import RivalryTracker
+                    # Track rivalry data based on this kill event
+                    await RivalryTracker.update_rivalry_on_kill(bot.db, {
+                        "killer_id": killer_id,
+                        "victim_id": victim_id,
+                        "server_id": server_id,
+                        "timestamp": kill_event["timestamp"]
+                    })
+                    logger.debug(f"Updated rivalry data for kill: {killer_name} → {victim_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to update rivalry data: {e}")
+                    # This is non-critical, so we continue processing
 
                 # Verify the death was recorded
                 if not death_result:

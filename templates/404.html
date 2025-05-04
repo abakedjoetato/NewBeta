@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+
+{% block title %}Page Not Found{% endblock %}
+
+{% block content %}
+<div class="text-center mt-5">
+    <div class="error mx-auto" data-text="404">404</div>
+    <p class="lead text-gray-800 mb-4">Page Not Found</p>
+    <p class="text-gray-500 mb-4">It looks like you found a glitch in the matrix...</p>
+    <a href="{{ url_for('home') }}" class="btn btn-primary">← Back to Home</a>
+</div>
+
+<style>
+    .error {
+        color: #5a5c69;
+        font-size: 7rem;
+        position: relative;
+        line-height: 1;
+        width: 12.5rem;
+        margin: 0 auto;
+    }
+    
+    .error:before {
+        content: attr(data-text);
+        position: absolute;
+        left: -2px;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        color: #6e707e;
+        opacity: 0.1;
+    }
+</style>
+{% endblock %}

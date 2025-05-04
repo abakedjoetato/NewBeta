@@ -47,6 +47,9 @@ intents.members = True          # For member info and nickname functions
 # Initialize the bot with command prefix and intents
 bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, application_id=BOT_APPLICATION_ID)
 
+# Add background_tasks dictionary to track running tasks
+bot.background_tasks = {}
+
 # Track bot startup time
 start_time = datetime.utcnow()
 
@@ -67,6 +70,21 @@ async def on_ready():
         name="PvP battles | !help"
     )
     await bot.change_presence(activity=activity)
+    
+    # Start auto-bounty system background task
+    try:
+        from utils.auto_bounty import AutoBountySystem
+        
+        # Create task for auto-bounty system (runs every 5 minutes)
+        if 'auto_bounty_task' not in bot.background_tasks:
+            logger.info("Starting auto-bounty system background task...")
+            auto_bounty_task = asyncio.create_task(
+                AutoBountySystem.start_auto_bounty_task(bot, interval_minutes=5)
+            )
+            bot.background_tasks['auto_bounty_task'] = auto_bounty_task
+            logger.info("Auto-bounty system started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start auto-bounty system: {e}", exc_info=True)
     
     # Update status
     try:
