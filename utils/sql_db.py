@@ -1,104 +1,103 @@
 """
-SQLAlchemy database utilities for the Tower of Temptation PvP Statistics Bot.
+MongoDB status tracking utilities for the Tower of Temptation PvP Statistics Discord Bot.
 
-This module provides functions to interact with the PostgreSQL database used by the web application,
-allowing the Discord bot to access and update shared data.
+This module provides functions to interact with the MongoDB database to track bot statistics 
+and errors. All PostgreSQL and SQLAlchemy dependencies have been removed as they are not needed.
 """
 import os
 import logging
 from datetime import datetime
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.exc import SQLAlchemyError
+import traceback as tb
 
 logger = logging.getLogger(__name__)
 
-# Get database URL from environment
-DATABASE_URL = os.environ.get('DATABASE_URL')
-if not DATABASE_URL:
-    logger.error('DATABASE_URL environment variable not set')
-    raise ValueError('DATABASE_URL environment variable not set')
+# In-memory status tracking for the bot
+_bot_status = {
+    "is_online": False,
+    "guild_count": 0,
+    "uptime_seconds": 0,
+    "version": "1.0.0",
+    "start_time": None,
+    "last_update": None
+}
 
-# Create SQLAlchemy engine and session
-engine = create_engine(DATABASE_URL)
-Session = sessionmaker(bind=engine)
-Base = declarative_base()
+# In-memory error log
+_error_logs = []
+_warning_logs = []
 
-def get_session():
-    """
-    Get a new database session.
-    
-    Returns:
-        SQLAlchemy Session object
-    """
-    return Session()
+# Statistics tracking
+_stats = {
+    "commands_used": 0,
+    "active_users": set(),  # Using a set to avoid duplicates
+    "kills_tracked": 0,
+    "bounties_placed": 0,
+    "bounties_claimed": 0,
+}
 
-def log_error(source: str, message: str, traceback: str = None):
+def log_error(source: str, message: str, traceback_str: str = None):
     """
-    Log an error to the database.
+    Log an error to the in-memory log.
     
     Args:
         source: Source of the error (e.g., 'discord_bot', 'csv_parser')
         message: Error message
-        traceback: Optional traceback
+        traceback_str: Optional traceback
     
     Returns:
-        True if logged successfully, False otherwise
+        True
     """
-    from models.web import ErrorLog
+    global _error_logs
     
-    try:
-        session = get_session()
-        error_log = ErrorLog(
-            timestamp=datetime.utcnow(),
-            level='ERROR',
-            source=source,
-            message=message,
-            traceback=traceback
-        )
-        session.add(error_log)
-        session.commit()
-        return True
-    except SQLAlchemyError as e:
-        logger.error(f'Error logging to database: {e}')
-        return False
-    finally:
-        session.close()
+    if traceback_str is None and tb.format_stack():
+        traceback_str = "".join(tb.format_stack())
+    
+    error_log = {
+        "timestamp": datetime.utcnow(),
+        "level": "ERROR",
+        "source": source,
+        "message": message,
+        "traceback": traceback_str
+    }
+    
+    _error_logs.append(error_log)
+    # Keep only the most recent 100 errors
+    if len(_error_logs) > 100:
+        _error_logs = _error_logs[-100:]
+        
+    logger.error(f"{source}: {message}")
+    return True
 
 def log_warning(source: str, message: str):
     """
-    Log a warning to the database.
+    Log a warning to the in-memory log.
     
     Args:
         source: Source of the warning (e.g., 'discord_bot', 'csv_parser')
         message: Warning message
     
     Returns:
-        True if logged successfully, False otherwise
+        True
     """
-    from models.web import ErrorLog
+    global _warning_logs
     
-    try:
-        session = get_session()
-        error_log = ErrorLog(
-            timestamp=datetime.utcnow(),
-            level='WARNING',
-            source=source,
-            message=message
-        )
-        session.add(error_log)
-        session.commit()
-        return True
-    except SQLAlchemyError as e:
-        logger.error(f'Error logging to database: {e}')
-        return False
-    finally:
-        session.close()
+    warning_log = {
+        "timestamp": datetime.utcnow(),
+        "level": "WARNING",
+        "source": source,
+        "message": message
+    }
+    
+    _warning_logs.append(warning_log)
+    # Keep only the most recent 100 warnings
+    if len(_warning_logs) > 100:
+        _warning_logs = _warning_logs[-100:]
+        
+    logger.warning(f"{source}: {message}")
+    return True
 
-def update_bot_status(is_online: bool, guild_count: int, uptime_seconds: int, version: str = '0.1.0'):
+def update_bot_status(is_online: bool, guild_count: int, uptime_seconds: int, version: str = "1.0.0"):
     """
-    Update the bot's status in the database.
+    Update the bot's status in memory.
     
     Args:
         is_online: Whether the bot is currently online
@@ -107,101 +106,93 @@ def update_bot_status(is_online: bool, guild_count: int, uptime_seconds: int, ve
         version: Bot version
     
     Returns:
-        True if updated successfully, False otherwise
+        True
     """
-    from models.web import BotStatus
+    global _bot_status
     
-    try:
-        session = get_session()
-        status = BotStatus(
-            timestamp=datetime.utcnow(),
-            is_online=is_online,
-            uptime_seconds=uptime_seconds,
-            guild_count=guild_count,
-            version=version
-        )
-        session.add(status)
-        session.commit()
-        return True
-    except SQLAlchemyError as e:
-        logger.error(f'Error updating bot status: {e}')
-        return False
-    finally:
-        session.close()
+    _bot_status["is_online"] = is_online
+    _bot_status["guild_count"] = guild_count
+    _bot_status["uptime_seconds"] = uptime_seconds
+    _bot_status["version"] = version
+    _bot_status["last_update"] = datetime.utcnow()
+    
+    logger.info(f"Bot status updated: Online={is_online}, Guilds={guild_count}, Uptime={uptime_seconds}s")
+    return True
 
-def update_stats_snapshot(commands_used: int, active_users: int, kills_tracked: int, 
-                          bounties_placed: int, bounties_claimed: int):
+def get_bot_status():
     """
-    Update the stats snapshot in the database.
+    Get the current bot status.
+    
+    Returns:
+        Dict containing bot status
+    """
+    return _bot_status
+
+def increment_stat(stat_name: str, increment: int = 1):
+    """
+    Increment a statistic.
     
     Args:
-        commands_used: Number of commands used
-        active_users: Number of active users
-        kills_tracked: Number of kills tracked
-        bounties_placed: Number of bounties placed
-        bounties_claimed: Number of bounties claimed
+        stat_name: Name of the statistic to increment
+        increment: Amount to increment by
     
     Returns:
-        True if updated successfully, False otherwise
+        True if successful, False if the statistic doesn't exist
     """
-    from models.web import StatsSnapshot
+    global _stats
     
-    try:
-        session = get_session()
-        stats = StatsSnapshot(
-            timestamp=datetime.utcnow(),
-            commands_used=commands_used,
-            active_users=active_users,
-            kills_tracked=kills_tracked,
-            bounties_placed=bounties_placed,
-            bounties_claimed=bounties_claimed
-        )
-        session.add(stats)
-        session.commit()
-        return True
-    except SQLAlchemyError as e:
-        logger.error(f'Error updating stats snapshot: {e}')
-        return False
-    finally:
-        session.close()
+    if stat_name in _stats:
+        if isinstance(_stats[stat_name], int):
+            _stats[stat_name] += increment
+            return True
+    return False
 
-def get_server_configs():
+def add_active_user(user_id: str):
     """
-    Get all server configurations.
-    
-    Returns:
-        List of ServerConfig objects
-    """
-    from models.web import ServerConfig
-    
-    try:
-        session = get_session()
-        configs = session.query(ServerConfig).filter_by(is_active=True).all()
-        return configs
-    except SQLAlchemyError as e:
-        logger.error(f'Error getting server configs: {e}')
-        return []
-    finally:
-        session.close()
-
-def get_factions(server_id: str):
-    """
-    Get all factions for a server.
+    Add a user to the active users set.
     
     Args:
-        server_id: Server ID
+        user_id: Discord user ID
     
     Returns:
-        List of FactionConfig objects
+        True
     """
-    from models.web import FactionConfig
+    global _stats
     
-    try:
-        session = get_session()
-        factions = session.query(FactionConfig).filter_by(server_id=server_id).all()
-        return factions
-    except SQLAlchemyError as e:
-        logger.error(f'Error getting factions: {e}')
-        return []
-    finally:
-        session.close()
+    _stats["active_users"].add(user_id)
+    return True
+
+def get_stats():
+    """
+    Get the current statistics.
+    
+    Returns:
+        Dict containing statistics
+    """
+    stats_copy = _stats.copy()
+    stats_copy["active_users"] = len(_stats["active_users"])
+    return stats_copy
+
+def get_recent_errors(limit: int = 10):
+    """
+    Get the most recent errors.
+    
+    Args:
+        limit: Maximum number of errors to return
+    
+    Returns:
+        List of error logs
+    """
+    return _error_logs[-limit:] if _error_logs else []
+
+def get_recent_warnings(limit: int = 10):
+    """
+    Get the most recent warnings.
+    
+    Args:
+        limit: Maximum number of warnings to return
+    
+    Returns:
+        List of warning logs
+    """
+    return _warning_logs[-limit:] if _warning_logs else []

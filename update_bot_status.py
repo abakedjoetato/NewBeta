@@ -1,8 +1,8 @@
 """
-Script to update the bot's status in the database.
+Script to update the bot's status in the in-memory tracking system.
 
-This script is meant to be run periodically to provide status updates about the Discord bot
-for the web interface.
+This script is meant to be run periodically to provide status updates about the Discord bot.
+It has been updated to remove any web interface or SQL database dependencies.
 """
 import os
 import sys
@@ -11,8 +11,7 @@ import time
 from datetime import datetime
 import asyncio
 import discord
-from app import app, db
-from models.web import BotStatus, ErrorLog, StatsSnapshot
+from utils.sql_db import update_bot_status, log_error, increment_stat
 
 # Configure logging
 logging.basicConfig(
@@ -72,76 +71,50 @@ async def get_bot_client():
         logger.error(f'Error connecting to Discord: {e}')
         return None, status_values
 
-async def update_status():
-    """Update the bot status in the database."""
+async def update_status_tracking():
+    """Update the bot status in the in-memory tracking system."""
     try:
-        with app.app_context():
-            logger.info('Updating bot status...')
-            
-            # Connect to Discord to get real data
-            client, status_values = await get_bot_client()
-            
-            # Create a new status entry
-            uptime = 0
-            if status_values['is_connected']:
-                uptime = int(time.time() - status_values['start_time'])
-            
-            # Get version from environment or use default
-            version = os.environ.get('BOT_VERSION', '0.1.0')
-            
-            status = BotStatus(
-                timestamp=datetime.utcnow(),
-                is_online=status_values['is_connected'],
-                uptime_seconds=uptime,
-                guild_count=status_values['guild_count'],
-                version=version
-            )
-            
-            # Add to database
-            db.session.add(status)
-            db.session.commit()
-            
-            logger.info(f'Status updated. Online: {status.is_online}, Guilds: {status.guild_count}')
-            
-            # If we have real data, update stats as well
-            if status_values['is_connected']:
-                # This is just a placeholder for now
-                # In a real implementation, we would query MongoDB for current stats
-                stats = StatsSnapshot(
-                    timestamp=datetime.utcnow(),
-                    commands_used=0,
-                    active_users=0,
-                    kills_tracked=0,
-                    bounties_placed=0,
-                    bounties_claimed=0
-                )
-                
-                db.session.add(stats)
-                db.session.commit()
-                logger.info('Stats snapshot created')
-            
-            return True
-    except Exception as e:
-        logger.error(f'Error updating status: {e}')
+        logger.info('Updating bot status...')
         
-        # Log the error in the database
-        try:
-            with app.app_context():
-                error_log = ErrorLog(
-                    timestamp=datetime.utcnow(),
-                    level='ERROR',
-                    source='status_updater',
-                    message=str(e),
-                    traceback=str(sys.exc_info())
-                )
-                db.session.add(error_log)
-                db.session.commit()
-        except Exception as db_error:
-            logger.error(f'Error logging to database: {db_error}')
+        # Connect to Discord to get real data
+        client, status_values = await get_bot_client()
+        
+        # Calculate uptime
+        uptime = 0
+        if status_values['is_connected']:
+            uptime = int(time.time() - status_values['start_time'])
+        
+        # Get version from environment or use default
+        version = os.environ.get('BOT_VERSION', '1.0.0')
+        
+        # Update the status tracking
+        update_bot_status(
+            is_online=status_values['is_connected'],
+            guild_count=status_values['guild_count'],
+            uptime_seconds=uptime,
+            version=version
+        )
+        
+        logger.info(f'Status updated. Online: {status_values["is_connected"]}, Guilds: {status_values["guild_count"]}')
+        
+        # If we have real data, update stats as well
+        if status_values['is_connected']:
+            # In a real implementation, we would query MongoDB for current stats
+            # but for now we'll just increment some counters
+            increment_stat("command_checks")
+            logger.info('Stats tracking updated')
+        
+        return True
+    except Exception as e:
+        error_message = f'Error updating status: {e}'
+        logger.error(error_message)
+        
+        # Log the error
+        log_error('status_updater', error_message, str(sys.exc_info()))
         
         return False
 
 if __name__ == "__main__":
     logger.info('Bot status updater started')
-    asyncio.run(update_status())
+    asyncio.run(update_status_tracking())
     logger.info('Bot status updater finished')
